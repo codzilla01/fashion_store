@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Naseej Activation Tool",
+  "version": "0.1.0",
+  "identifier": "com.naseej.activation",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1422",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "Naseej Activation Tool", "width": 1050, "height": 800, "minWidth": 760, "minHeight": 640, "center": true, "resizable": true }],
+    "security": { "csp": "default-src 'self'; img-src 'self' data: asset:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src ipc: http://ipc.localhost" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "Offline license activation utility",
+    "longDescription": "Independent offline request and signed license import utility for Naseej POS.",
+    "category": "Utility",
+    "windows": { "nsis": { "displayLanguageSelector": false, "languages": ["English", "Arabic"] } }
+  }
+}
