@@ -108,6 +108,9 @@ jobs:
             fi
           done
           echo "perl resolves to: $(command -v perl || true)"
+          if [ -x "/c/Strawberry/perl/bin/perl.exe" ]; then
+            "/c/Strawberry/perl/bin/perl.exe" -MLocale::Maketext::Simple -e 'print "Strawberry Perl can build OpenSSL\n"'
+          fi
 
       - name: Create placeholder frontend dist for Tauri codegen
         run: |
@@ -143,6 +146,9 @@ jobs:
         working-directory: apps/activation-tool/src-tauri
         run: |
           set +e
+          # Git Bash puts its own MSYS perl first on PATH, and that perl
+          # cannot build the vendored OpenSSL. Prepend Strawberry perl here.
+          if [ -d "/c/Strawberry/perl/bin" ]; then export PATH="/c/Strawberry/perl/bin:$PATH"; fi
           cargo check --color never --all-targets > /tmp/act.log 2>&1
           status=$?
           cat /tmp/act.log
@@ -156,6 +162,9 @@ jobs:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
         run: |
           set +e
+          # Git Bash puts its own MSYS perl first on PATH, and that perl
+          # cannot build the vendored OpenSSL. Prepend Strawberry perl here.
+          if [ -d "/c/Strawberry/perl/bin" ]; then export PATH="/c/Strawberry/perl/bin:$PATH"; fi
           cargo check --color never --all-targets > /tmp/pos.log 2>&1
           status=$?
           cat /tmp/pos.log
@@ -229,6 +238,9 @@ jobs:
             fi
           done
           echo "perl resolves to: $(command -v perl || true)"
+          if [ -x "/c/Strawberry/perl/bin/perl.exe" ]; then
+            "/c/Strawberry/perl/bin/perl.exe" -MLocale::Maketext::Simple -e 'print "Strawberry Perl can build OpenSSL\n"'
+          fi
 
       - name: Create placeholder frontend dist for Tauri codegen
         run: |
@@ -241,6 +253,9 @@ jobs:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
         run: |
           set +e
+          # Git Bash puts its own MSYS perl first on PATH, and that perl
+          # cannot build the vendored OpenSSL. Prepend Strawberry perl here.
+          if [ -d "/c/Strawberry/perl/bin" ]; then export PATH="/c/Strawberry/perl/bin:$PATH"; fi
           cargo test --color never --test windows_security -- --nocapture > /tmp/win.log 2>&1
           status=$?
           cat /tmp/win.log
@@ -309,6 +324,9 @@ jobs:
             fi
           done
           echo "perl resolves to: $(command -v perl || true)"
+          if [ -x "/c/Strawberry/perl/bin/perl.exe" ]; then
+            "/c/Strawberry/perl/bin/perl.exe" -MLocale::Maketext::Simple -e 'print "Strawberry Perl can build OpenSSL\n"'
+          fi
 
       - name: Install frontend dependencies
         working-directory: apps/pos-desktop
@@ -320,6 +338,9 @@ jobs:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: ${{ secrets.NASEEJ_LICENSE_PUBLIC_KEY_HEX }}
         run: |
           set +e
+          # Git Bash puts its own MSYS perl first on PATH, and that perl
+          # cannot build the vendored OpenSSL. Prepend Strawberry perl here.
+          if [ -d "/c/Strawberry/perl/bin" ]; then export PATH="/c/Strawberry/perl/bin:$PATH"; fi
           npm run tauri build -- --bundles nsis > /tmp/bundle.log 2>&1
           status=$?
           cat /tmp/bundle.log
