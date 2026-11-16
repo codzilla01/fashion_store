@@ -2373,7 +2373,7 @@ pub fn create_user(
     {
         return Err("USER_INPUT_INVALID".to_string());
     }
-    let license = crate::license::ensure_valid(state)?;
+    let license = crate::license::ensure_valid(&state)?;
     let password_phc = hash_password(&request.password)?;
     let user_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -2537,7 +2537,7 @@ pub fn create_branch(
     request: CreateBranchRequest,
 ) -> Result<BranchOption, String> {
     let session = require_permission(&state, &session_token, "branches.manage")?;
-    let license = crate::license::ensure_valid(state)?;
+    let license = crate::license::ensure_valid(&state)?;
     let max_branches = *license
         .limits
         .get("max_branches")

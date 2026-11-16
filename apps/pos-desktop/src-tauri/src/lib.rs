@@ -41,11 +41,17 @@ impl AppState {
     pub fn open(app_data_dir: PathBuf) -> Result<Self, String> {
         let db = db::open_database(&app_data_dir)?;
         let personal_data_key = db::load_or_create_personal_data_key(&app_data_dir)?;
-        Ok(Self {
+        let state = Self {
             db: Mutex::new(db),
             sessions: Mutex::new(HashMap::new()),
             app_data_dir,
             personal_data_key: Zeroizing::new(personal_data_key),
-        })
+        };
+        // Record the start of the local evaluation once, at first launch.
+        // Doing it here keeps the licence check itself read-only on the hot
+        // path, so it never has to take the database lock while a command
+        // already holds it.
+        license::initialize_local_trial(&state)?;
+        Ok(state)
     }
 }

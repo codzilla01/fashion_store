@@ -193,6 +193,19 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
     }
 }
 
+/// Record the start of the local evaluation.
+///
+/// Called once when the application state is created. The row is written only
+/// the first time; every later start reads the existing row, so the trial
+/// window cannot be extended by restarting the application.
+pub fn initialize_local_trial(state: &crate::AppState) -> Result<(), String> {
+    let fingerprint = match device_info() {
+        Ok(device) => device.fingerprint,
+        Err(_) => return Ok(()),
+    };
+    load_or_start_local_trial(state, &fingerprint).map(|_| ())
+}
+
 /// Local, device-bound evaluation entitlement.
 ///
 /// The evaluation is recorded once in the encrypted database so it cannot be
