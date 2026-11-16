@@ -419,6 +419,15 @@ jobs:
             (cd "$crate" && cargo fmt)
           done
 
+      - name: Apply machine-fixable clippy suggestions
+        env:
+          NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+        run: |
+          for crate in crates/license-format tools/license-issuer apps/pos-desktop/src-tauri apps/activation-tool/src-tauri; do
+            echo "--- clippy --fix $crate"
+            (cd "$crate" && cargo clippy --color never --fix --allow-dirty --allow-staged --all-targets -- -D warnings) || true
+          done
+
       - name: Commit and push formatting changes
         run: |
           git config user.name "github-actions[bot]"

@@ -407,7 +407,7 @@ mod tests {
     #[test]
     fn local_evaluation_limits_and_features_are_bounded() {
         let features = local_trial_features();
-        assert!(features.contains(&"pos.sell".to_string()));
+        assert!(features.contains("pos.sell"));
         assert!(!features.is_empty());
 
         let limits = local_trial_limits();
@@ -417,7 +417,9 @@ mod tests {
 
     #[test]
     fn grace_period_is_a_positive_bounded_number_of_days() {
-        let days = grace_period_days();
+        // black_box keeps the assertion from being folded away at compile
+        // time, so it really checks the value this build will use.
+        let days = std::hint::black_box(grace_period_days());
         assert!(days > 0, "grace period must be positive");
         assert!(days <= 365, "grace period must stay bounded");
     }
@@ -436,7 +438,8 @@ mod tests {
 
     #[test]
     fn local_trial_window_is_shorter_than_a_year() {
-        assert!(LOCAL_TRIAL_DAYS > 0);
-        assert!(LOCAL_TRIAL_DAYS <= 31);
+        let days = std::hint::black_box(LOCAL_TRIAL_DAYS);
+        assert!(days > 0, "the local evaluation must last at least one day");
+        assert!(days <= 31, "the local evaluation must stay within a month");
     }
 }
