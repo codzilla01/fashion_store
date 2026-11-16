@@ -86,7 +86,8 @@ jobs:
             patchelf \
             libssl-dev \
             pkg-config \
-            build-essential
+            build-essential \
+            perl
 
       - name: Check formatting
         working-directory: crates/license-format
@@ -114,13 +115,54 @@ jobs:
 
       - name: Check activation tool crate
         working-directory: apps/activation-tool/src-tauri
-        run: cargo check --all-targets
+        run: |
+          cargo check --all-targets 2>&1 | tee /tmp/act.log
+          if grep -qE "^error" /tmp/act.log; then
+            grep -E -A 12 "^error" /tmp/act.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
 
       - name: Check POS crate
         working-directory: apps/pos-desktop/src-tauri
         env:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
-        run: cargo check --all-targets
+        run: |
+          cargo check --all-targets 2>&1 | tee /tmp/pos.log
+          if grep -qE "^error" /tmp/pos.log; then
+            grep -E -A 12 "^error" /tmp/pos.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
+
+      - name: Clippy (license format)
+        working-directory: crates/license-format
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Clippy (issuer)
+        working-directory: tools/license-issuer
+        run: cargo clippy --all-targets -- -D warnings
+
+  windows-tests:
+    name: Windows SQLCipher / DPAPI integration tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/pos-desktop/src-tauri
+
+      - name: Run Windows integration tests
+        working-directory: apps/pos-desktop/src-tauri
+        env:
+          NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+        run: |
+          cargo test --all-targets 2>&1 | tee /tmp/win.log
+          if grep -qE "^error" /tmp/win.log; then
+            grep -E -A 12 "^error" /tmp/win.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
 
   windows-bundle:
     name: Windows installer bundle
@@ -152,12 +194,15 @@ jobs:
         env:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: ${{ secrets.NASEEJ_LICENSE_PUBLIC_KEY_HEX }}
         run: |
-          npm run tauri build -- --bundles nsis
+          npm run tauri build -- --bundles nsis 2>&1 | tee /tmp/bundle.log
+          if grep -qE "^error" /tmp/bundle.log; then
+            grep -E "^error" /tmp/bundle.log | head -30 | while read -r l; do echo "::error::$l"; done
+            exit 1
+          fi
 
       - name: Upload installer artifacts
         uses: actions/upload-artifact@v4
         with:
           name: naseej-pos-windows-installer
-          path: |
-            apps/pos-desktop/src-tauri/target/release/bundle/nsis/*.exe
+          path: apps/pos-desktop/src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
