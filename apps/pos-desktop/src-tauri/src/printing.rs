@@ -141,10 +141,7 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
         out.push_str(&centre(&receipt.branch_name_en, width));
         out.push('\n');
     }
-    out.push_str(&centre(
-        &format!("فاتورة / Invoice {invoice_no}"),
-        width,
-    ));
+    out.push_str(&centre(&format!("فاتورة / Invoice {invoice_no}"), width));
     out.push('\n');
     out.push_str(&separator);
     out.push('\n');
@@ -178,7 +175,7 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
         out.push_str(&format!(
             "  {:>3} x {:<12}{:>10}",
             line.quantity,
-            {unit},
+            { unit },
             format_amount(line.total_minor, &receipt.currency_code)
         ));
         out.push('\n');

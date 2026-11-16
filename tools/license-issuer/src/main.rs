@@ -305,7 +305,7 @@ fn issue(
     };
     if let Err(error) = write_record(&registry_dir, &record) {
         let _ = fs::remove_file(&output);
-        return Err(error.into());
+        return Err(error);
     }
 
     records.push(record);
