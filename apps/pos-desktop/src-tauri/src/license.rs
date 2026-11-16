@@ -164,8 +164,7 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
             // An expired licence still grants the grace period, so a merchant
             // is not locked out of their own shop in the middle of a day.
             if code == "LICENSE_EXPIRED" {
-                if let Ok(expires) =
-                    DateTime::parse_from_rfc3339(&envelope.payload.expires_at_utc)
+                if let Ok(expires) = DateTime::parse_from_rfc3339(&envelope.payload.expires_at_utc)
                 {
                     let grace_end =
                         expires.with_timezone(&Utc) + Duration::days(grace_period_days());
@@ -198,7 +197,10 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
 ///
 /// The evaluation is recorded once in the encrypted database so it cannot be
 /// restarted by deleting files, and it is bound to the device fingerprint.
-fn local_trial_status(state: &crate::AppState, fingerprint: String) -> Result<LicenseStatus, String> {
+fn local_trial_status(
+    state: &crate::AppState,
+    fingerprint: String,
+) -> Result<LicenseStatus, String> {
     let trial = load_or_start_local_trial(state, &fingerprint)?;
     let now = Utc::now();
     let trial_expires = parse_utc(&trial.trial_expires_at_utc)?;
@@ -308,7 +310,8 @@ fn load_or_start_local_trial(
             }
         }
     };
-    tx.commit().map_err(|_| "LICENSE_CLOCK_STATE_FAILED".to_string())?;
+    tx.commit()
+        .map_err(|_| "LICENSE_CLOCK_STATE_FAILED".to_string())?;
     Ok(result)
 }
 

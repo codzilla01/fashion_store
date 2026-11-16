@@ -64,16 +64,11 @@ fn refuses_to_open_the_database_without_the_protected_key() {
     let wrong_key = [0xABu8; 32];
     db::set_sqlcipher_key(&connection, &wrong_key).expect("key pragma accepted");
     let readable = connection
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
+        .query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        })
         .is_ok();
-    assert!(
-        !readable,
-        "a wrong key must not be able to read the schema"
-    );
+    assert!(!readable, "a wrong key must not be able to read the schema");
 
     // The correct key, recovered through DPAPI, must still work.
     let key = db::load_database_key(&directory).expect("DPAPI key round trip");
@@ -98,7 +93,9 @@ fn dpapi_protects_and_unprotects_the_database_key() {
         "protected bytes must not equal the plaintext"
     );
     assert!(
-        !protected.windows(secret.len()).any(|window| window == secret),
+        !protected
+            .windows(secret.len())
+            .any(|window| window == secret),
         "plaintext must not be recoverable from the protected blob"
     );
 
@@ -174,7 +171,10 @@ fn creates_and_restores_an_encrypted_backup() {
         .connection()
         .query_row("SELECT COUNT(*) FROM branches", [], |row| row.get(0))
         .expect("restored database is queryable");
-    assert!(branch_count > 0, "restored database must contain the seed branch");
+    assert!(
+        branch_count > 0,
+        "restored database must contain the seed branch"
+    );
 
     fs::remove_dir_all(directory).ok();
 }
