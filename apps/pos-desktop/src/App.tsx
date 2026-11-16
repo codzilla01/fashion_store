@@ -43,7 +43,7 @@ type PaymentLine = { id: string; method: PayMethod; amountMinor: number };
 type DesktopGate = 'checking' | 'license' | 'setup' | 'login' | 'tax' | 'ready' | 'error';
 type AuthResult = { sessionToken: string; displayName: string; branchId: string };
 type AppStatus = { needsOwnerSetup: boolean; taxConfigurationRequired: boolean; taxRateBps: number; pricesIncludeTax: boolean | null };
-type LicenseStatus = { valid: boolean; statusCode: string; deviceFingerprint: string | null; licenseId: string | null; customerId: string | null; planCode: string | null; expiresAtUtc: string | null; features: string[]; limits: Record<string, number>; publicKeyConfigured: boolean };
+type LicenseStatus = { valid: boolean; statusCode: string; deviceFingerprint: string | null; licenseId: string | null; customerId: string | null; planCode: string | null; expiresAtUtc: string | null; features: string[]; limits: Record<string, number>; publicKeyConfigured: boolean; localTrial: boolean; gracePeriod: boolean; graceExpiresAtUtc: string | null };
 type ActivationRequest = { schema_version: number; request_id: string; product: string; app_version: string; requested_at_utc: string; device_fingerprint: string };
 type WorkspaceTab = 'sale' | 'inventory' | 'products' | 'purchases' | 'reports' | 'users' | 'branches' | 'backup' | 'returns';
 type SetupOption = { id: string; code: string | null; nameAr: string; nameEn: string; colorHex: string | null; profileCode: string | null };
@@ -1081,6 +1081,31 @@ function App() {
             <div className="cashier-info"><div className="avatar">{(desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')).slice(0, 1)}</div><div className="cashier-copy"><strong>{desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')}</strong><small>{t.cashier} · {t.shift}</small></div><Icon name="chevronDown" size={14} /></div>
           </div>
         </header>
+
+        {licenseStatus && (licenseStatus.localTrial || licenseStatus.gracePeriod) && (
+          <div className="license-banner" role="status">
+            <Icon name="clock" size={16} />
+            <span>
+              {(() => {
+                const dateLocale = lang === 'ar' ? 'ar-EG' : 'en-GB';
+                const graceEnd = licenseStatus.graceExpiresAtUtc
+                  ? new Date(licenseStatus.graceExpiresAtUtc).toLocaleDateString(dateLocale)
+                  : '—';
+                const trialEnd = licenseStatus.expiresAtUtc
+                  ? new Date(licenseStatus.expiresAtUtc).toLocaleDateString(dateLocale)
+                  : '—';
+                if (licenseStatus.gracePeriod) {
+                  return lang === 'ar'
+                    ? `انتهت صلاحية الترخيص — مهلة سماح حتى ${graceEnd}. فعّل اشتراكًا للاستمرار.`
+                    : `Licence expired — grace period until ${graceEnd}. Activate a subscription to continue.`;
+                }
+                return lang === 'ar'
+                  ? `نسخة تجريبية محلية — متاحة حتى ${trialEnd}.`
+                  : `Local evaluation — available until ${trialEnd}.`;
+              })()}
+            </span>
+          </div>
+        )}
 
         <div className="page-content">
           {activeTab === 'sale' ? <>

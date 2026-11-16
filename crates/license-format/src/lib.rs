@@ -14,6 +14,55 @@ pub const LICENSE_SCHEMA_VERSION: u32 = 2;
 pub const PLAN_TRIAL_7D: &str = "trial_7d";
 pub const PLAN_ANNUAL_12M: &str = "annual_12m";
 
+/// Locally generated evaluation entitlement.
+///
+/// Unlike [`PLAN_TRIAL_7D`] this plan is **not** signed by the issuer. It is
+/// created by the application on the device itself so a customer can evaluate
+/// the product without waiting for an offline activation round-trip. It is
+/// deliberately weaker than a signed license and is documented as such.
+pub const PLAN_TRIAL_LOCAL: &str = "trial_local";
+
+/// Length of the automatically started local evaluation, in days.
+pub const LOCAL_TRIAL_DAYS: i64 = 7;
+
+/// Number of days a merchant may keep working after a licence expires.
+///
+/// Hard-locking a shop in the middle of a trading day is worse for the
+/// customer than a short unpaid extension, so expiry moves the application
+/// into a clearly marked grace period before it locks.
+pub const DEFAULT_GRACE_DAYS: i64 = 14;
+
+/// Features granted by the automatically started local evaluation.
+///
+/// `reports.profit` and `commissions.read` are intentionally excluded: margin
+/// reporting stays a paid capability.
+pub fn local_trial_features() -> BTreeSet<String> {
+    BTreeSet::from([
+        "pos.sell".to_string(),
+        "inventory.manage".to_string(),
+        "returns.exchange".to_string(),
+        "reports.basic".to_string(),
+        "backup.restore".to_string(),
+    ])
+}
+
+/// Limits granted by the automatically started local evaluation.
+pub fn local_trial_limits() -> BTreeMap<String, u64> {
+    BTreeMap::from([
+        ("max_users".to_string(), 3),
+        ("max_branches".to_string(), 1),
+    ])
+}
+
+/// Grace period in days, overridable at build time with
+/// `NASEEJ_LICENSE_GRACE_DAYS`.
+pub fn grace_period_days() -> i64 {
+    option_env!("NASEEJ_LICENSE_GRACE_DAYS")
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| (0..=365).contains(value))
+        .unwrap_or(DEFAULT_GRACE_DAYS)
+}
+
 #[derive(Debug, Error)]
 pub enum LicenseError {
     #[error("license serialization is invalid")]

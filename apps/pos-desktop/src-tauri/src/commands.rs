@@ -497,7 +497,7 @@ pub struct ProfitSummary {
 
 #[tauri::command]
 pub fn get_license_status(state: tauri::State<'_, AppState>) -> crate::license::LicenseStatus {
-    let mut status = crate::license::current_status();
+    let mut status = crate::license::current_status(&state);
     if status.valid {
         if let Err(error) = crate::license::record_trusted_time(&state, &status) {
             status.valid = false;
@@ -517,7 +517,7 @@ pub fn import_activation_license(
     state: tauri::State<'_, AppState>,
     license_json: String,
 ) -> Result<crate::license::LicenseStatus, String> {
-    let status = crate::license::import_signed_license(&license_json)?;
+    let status = crate::license::import_signed_license(&state, &license_json)?;
     crate::license::record_trusted_time(&state, &status)?;
     Ok(status)
 }
@@ -2373,7 +2373,7 @@ pub fn create_user(
     {
         return Err("USER_INPUT_INVALID".to_string());
     }
-    let license = crate::license::ensure_valid()?;
+    let license = crate::license::ensure_valid(state)?;
     let password_phc = hash_password(&request.password)?;
     let user_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -2537,7 +2537,7 @@ pub fn create_branch(
     request: CreateBranchRequest,
 ) -> Result<BranchOption, String> {
     let session = require_permission(&state, &session_token, "branches.manage")?;
-    let license = crate::license::ensure_valid()?;
+    let license = crate::license::ensure_valid(state)?;
     let max_branches = *license
         .limits
         .get("max_branches")
@@ -3652,7 +3652,7 @@ pub fn sqlcipher_health(state: tauri::State<'_, AppState>) -> Result<String, Str
 }
 
 fn require_permission(state: &AppState, token: &str, permission: &str) -> Result<Session, String> {
-    let license = crate::license::ensure_valid()?;
+    let license = crate::license::ensure_valid(state)?;
     crate::license::record_trusted_time(state, &license)?;
     let required_feature = match permission {
         "sales.read" | "sales.create" | "sales.discount" | "customers.manage" => Some("pos.sell"),

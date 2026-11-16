@@ -7,6 +7,7 @@ import uuid
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "apps/pos-desktop/src-tauri/migrations/0001_initial.sql"
 MIGRATION_2 = ROOT / "apps/pos-desktop/src-tauri/migrations/0002_branch_management.sql"
+MIGRATION_3 = ROOT / "apps/pos-desktop/src-tauri/migrations/0003_local_trial_state.sql"
 
 
 class SchemaSmokeTests(unittest.TestCase):
@@ -15,6 +16,7 @@ class SchemaSmokeTests(unittest.TestCase):
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(MIGRATION.read_text(encoding="utf-8"))
         self.db.executescript(MIGRATION_2.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_3.read_text(encoding="utf-8"))
         self.branch = "branch-test"
         self.user = "user-test"
         self.category = "category-test"
@@ -90,6 +92,7 @@ class SchemaSmokeTests(unittest.TestCase):
 
     def test_branch_administration_is_owner_only_and_migration_is_repeatable(self):
         self.db.executescript(MIGRATION_2.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_3.read_text(encoding="utf-8"))
         rows = {row[0]: bool(row[1]) for row in self.db.execute(
             "SELECT code,EXISTS(SELECT 1 FROM role_permissions rp WHERE rp.role_code=roles.code AND rp.permission_code='branches.manage') FROM roles")}
         self.assertFalse(rows["cashier"])
@@ -137,6 +140,27 @@ class SchemaSmokeTests(unittest.TestCase):
         self.assertEqual(quantity, 2)
         self.assertEqual(self.db.execute("SELECT COUNT(*) FROM exchange_groups WHERE return_document_id='exchange-return'").fetchone()[0], 1)
         self.assertEqual(self.db.execute("SELECT SUM(amount_minor) FROM payments WHERE invoice_id='invoice-new'").fetchone()[0], 90000)
+
+
+
+
+    def test_local_trial_state_is_singleton_and_append_only(self):
+        self.db.execute("INSERT INTO local_trial_state(singleton,device_fingerprint,trial_started_at_utc,trial_expires_at_utc,grace_expires_at_utc,created_at) VALUES(1,?,?,?,?,?)",
+                        ("fingerprint-1", "2026-10-10T10:00:00Z", "2026-10-17T10:00:00Z", "2026-10-31T10:00:00Z", "2026-10-10T10:00:00Z"))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("INSERT INTO local_trial_state(singleton,device_fingerprint,trial_started_at_utc,trial_expires_at_utc,grace_expires_at_utc,created_at) VALUES(1,?,?,?,?,?)",
+                            ("fingerprint-2", "2026-11-10T10:00:00Z", "2026-11-17T10:00:00Z", "2026-11-30T10:00:00Z", "2026-11-10T10:00:00Z"))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE local_trial_state SET trial_expires_at_utc='2099-01-01T00:00:00Z' WHERE singleton=1")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("DELETE FROM local_trial_state WHERE singleton=1")
+
+    def test_local_trial_state_records_the_device_fingerprint(self):
+        self.db.execute("INSERT INTO local_trial_state(singleton,device_fingerprint,trial_started_at_utc,trial_expires_at_utc,grace_expires_at_utc,created_at) VALUES(1,?,?,?,?,?)",
+                        ("abc123", "2026-10-10T10:00:00Z", "2026-10-17T10:00:00Z", "2026-10-31T10:00:00Z", "2026-10-10T10:00:00Z"))
+        row = self.db.execute("SELECT device_fingerprint, trial_expires_at_utc FROM local_trial_state WHERE singleton=1").fetchone()
+        self.assertEqual(row[0], "abc123")
+        self.assertEqual(row[1], "2026-10-17T10:00:00Z")
 
 
 if __name__ == "__main__":

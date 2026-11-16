@@ -10,7 +10,8 @@ use zeroize::{Zeroize, Zeroizing};
 
 const INITIAL_SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_branch_management.sql");
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+const MIGRATION_0003: &str = include_str!("../migrations/0003_local_trial_state.sql");
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 const BRANCH_ID: &str = "00000000-0000-4000-8000-000000000001";
 
 pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
@@ -119,6 +120,25 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
             .commit()
             .map_err(|e| format!("MIGRATION_0002_COMMIT:{e}"))?;
         version = 2;
+    }
+    if version < 3 {
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Exclusive)
+            .map_err(|e| format!("MIGRATION_0003_BEGIN:{e}"))?;
+        transaction
+            .execute_batch(MIGRATION_0003)
+            .map_err(|e| format!("MIGRATION_0003:{e}"))?;
+        let digest = hex::encode(Sha256::digest(MIGRATION_0003.as_bytes()));
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations(version, checksum, applied_at) VALUES(3, ?1, ?2)",
+                rusqlite::params![digest, Utc::now().to_rfc3339()],
+            )
+            .map_err(|e| format!("MIGRATION_0003_RECORD:{e}"))?;
+        transaction
+            .commit()
+            .map_err(|e| format!("MIGRATION_0003_COMMIT:{e}"))?;
+        version = 3;
     }
     if version != CURRENT_SCHEMA_VERSION {
         return Err("DB_MIGRATION_STATE_INVALID".to_string());
