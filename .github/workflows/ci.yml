@@ -118,21 +118,20 @@ jobs:
 
       - name: Test license format crate
         working-directory: crates/license-format
-        run: cargo test --all-features
+        run: cargo test --color never --all-features
 
       - name: Test license issuer
         working-directory: tools/license-issuer
-        run: cargo test --all-features
+        run: cargo test --color never --all-features
 
       - name: Check activation tool crate
         working-directory: apps/activation-tool/src-tauri
         run: |
           set +e
-          cargo check --all-targets > /tmp/act.log 2>&1
+          cargo check --color never --all-targets > /tmp/act.log 2>&1
           status=$?
           cat /tmp/act.log
           if [ $status -ne 0 ]; then
-            grep -E -A 12 '^error' /tmp/act.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           fi
 
@@ -142,11 +141,10 @@ jobs:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
         run: |
           set +e
-          cargo check --all-targets > /tmp/pos.log 2>&1
+          cargo check --color never --all-targets > /tmp/pos.log 2>&1
           status=$?
           cat /tmp/pos.log
           if [ $status -ne 0 ]; then
-            grep -E -A 12 '^error' /tmp/pos.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           fi
 
@@ -160,7 +158,10 @@ jobs:
             for f in /tmp/pos.log /tmp/act.log /tmp/win.log /tmp/bundle.log; do
               if [ -f "$f" ]; then
                 echo "#### $f"
-                tail -n 120 "$f"
+                echo "#### errors:"
+                grep -n -E '^(error|error\[|warning: unused|note: |help: |thread )' "$f" | head -60 || true
+                echo "#### tail:"
+                tail -n 60 "$f"
                 echo
               fi
             done
@@ -176,11 +177,11 @@ jobs:
 
       - name: Clippy (license format)
         working-directory: crates/license-format
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --color never --all-targets -- -D warnings
 
       - name: Clippy (issuer)
         working-directory: tools/license-issuer
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --color never --all-targets -- -D warnings
 
   windows-tests:
     name: Windows SQLCipher / DPAPI integration tests
@@ -210,11 +211,10 @@ jobs:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
         run: |
           set +e
-          cargo test --all-targets > /tmp/win.log 2>&1
+          cargo test --color never --test windows_security -- --nocapture > /tmp/win.log 2>&1
           status=$?
           cat /tmp/win.log
           if [ $status -ne 0 ]; then
-            grep -E -A 12 '^error' /tmp/win.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           fi
 
@@ -225,7 +225,10 @@ jobs:
             echo "### Windows integration test diagnostics"
             echo
             echo '```'
-            tail -n 200 /tmp/win.log
+            echo "#### errors:"
+            grep -n -E '^(error|error\[|warning: unused|note: |help: |thread )' /tmp/win.log | head -60 || true
+            echo "#### tail:"
+            tail -n 80 /tmp/win.log
             echo '```'
           } > "$RUNNER_TEMP/diagnostics.md"
           python3 -c "import json,sys; print(json.dumps({'body': open(sys.argv[1], encoding='utf-8').read()}))" \
@@ -276,7 +279,6 @@ jobs:
           status=$?
           cat /tmp/bundle.log
           if [ $status -ne 0 ]; then
-            grep -E -A 12 '^error' /tmp/bundle.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           fi
 
@@ -294,7 +296,10 @@ jobs:
             echo "### Installer bundle diagnostics"
             echo
             echo '```'
-            tail -n 200 /tmp/bundle.log
+            echo "#### errors:"
+            grep -n -E '^(error|error\[|warning: unused|note: |help: |thread )' /tmp/bundle.log | head -60 || true
+            echo "#### tail:"
+            tail -n 80 /tmp/bundle.log
             echo '```'
           } > "$RUNNER_TEMP/diagnostics.md"
           python3 -c "import json,sys; print(json.dumps({'body': open(sys.argv[1], encoding='utf-8').read()}))" \
