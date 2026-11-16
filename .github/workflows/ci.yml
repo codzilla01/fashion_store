@@ -172,6 +172,36 @@ jobs:
             exit 1
           fi
 
+
+      - name: Clippy (license format)
+        working-directory: crates/license-format
+        run: |
+          set +e
+          cargo clippy --color never --all-targets -- -D warnings > /tmp/clippy-license-format.log 2>&1
+          status=$?
+          cat /tmp/clippy-license-format.log
+          exit $status
+
+      - name: Clippy (issuer)
+        working-directory: tools/license-issuer
+        run: |
+          set +e
+          cargo clippy --color never --all-targets -- -D warnings > /tmp/clippy-issuer.log 2>&1
+          status=$?
+          cat /tmp/clippy-issuer.log
+          exit $status
+
+      - name: Clippy (POS)
+        working-directory: apps/pos-desktop/src-tauri
+        env:
+          NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+        run: |
+          set +e
+          cargo clippy --color never --all-targets -- -D warnings > /tmp/clippy-pos.log 2>&1
+          status=$?
+          cat /tmp/clippy-pos.log
+          exit $status
+
       - name: Publish build diagnostics on the commit
         if: failure()
         run: |
@@ -179,7 +209,7 @@ jobs:
             echo "### Build diagnostics — ${{ matrix.target }}"
             echo
             echo '```'
-            for f in /tmp/pos.log /tmp/act.log /tmp/win.log /tmp/bundle.log; do
+            for f in /tmp/pos.log /tmp/act.log /tmp/win.log /tmp/bundle.log /tmp/clippy-license-format.log /tmp/clippy-issuer.log /tmp/clippy-pos.log; do
               if [ -f "$f" ]; then
                 echo "#### $f"
                 echo "#### errors:"
@@ -198,14 +228,6 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
             --data @"$RUNNER_TEMP/diagnostics.json"
-
-      - name: Clippy (license format)
-        working-directory: crates/license-format
-        run: cargo clippy --color never --all-targets -- -D warnings
-
-      - name: Clippy (issuer)
-        working-directory: tools/license-issuer
-        run: cargo clippy --color never --all-targets -- -D warnings
 
   windows-tests:
     name: Windows SQLCipher / DPAPI integration tests

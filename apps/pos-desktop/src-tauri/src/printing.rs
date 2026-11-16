@@ -570,7 +570,7 @@ pub fn print_receipt(
 /// Hand a rendered receipt to the shell, which opens the print dialog.
 #[cfg(windows)]
 fn print_via_dialog(receipt: &ReceiptData, width: usize) -> Result<PrintOutcome, String> {
-    use std::{os::windows::ffi::OsStrExt, path::PathBuf};
+    use std::{os::windows::ffi::OsStrExt, path::PathBuf, ptr};
 
     let directory = std::env::temp_dir().join("NaseejPOS").join("receipts");
     std::fs::create_dir_all(&directory).map_err(|_| "PRINT_DIR_FAILED".to_string())?;
