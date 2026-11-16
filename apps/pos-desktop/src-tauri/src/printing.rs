@@ -141,38 +141,32 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
         out.push_str(&centre(&receipt.branch_name_en, width));
         out.push('\n');
     }
-    out.push_str(&centre(&format!("فاتورة / Invoice {}", receipt.invoice_no), width));
+    out.push_str(&centre(
+        &format!("فاتورة / Invoice {}", receipt.invoice_no),
+        width,
+    ));
     out.push('\n');
     out.push_str(&separator);
     out.push('\n');
     out.push_str(&format!(
         "{:<16}{:>16}",
-        "التاريخ / Date",
-        receipt.created_at_utc
+        "التاريخ / Date", receipt.created_at_utc
     ));
     out.push('\n');
     out.push_str(&format!(
         "{:<16}{:>16}",
-        "الكاشير / Cashier",
-        receipt.cashier_name
+        "الكاشير / Cashier", receipt.cashier_name
     ));
     out.push('\n');
     if let Some(customer) = &receipt.customer_name {
-        out.push_str(&format!(
-            "{:<16}{:>16}",
-            "العميل / Customer",
-            customer
-        ));
+        out.push_str(&format!("{:<16}{:>16}", "العميل / Customer", customer));
         out.push('\n');
     }
     out.push_str(&separator);
     out.push('\n');
 
     for line in &receipt.lines {
-        let title = format!(
-            "{} | {} | {}",
-            line.product, line.size, line.color
-        );
+        let title = format!("{} | {} | {}", line.product, line.size, line.color);
         for chunk in wrap(&title, width) {
             out.push_str(&chunk);
             out.push('\n');
@@ -349,7 +343,10 @@ pub fn render_html(receipt: &ReceiptData, width: usize) -> String {
             .unwrap_or_default(),
         rows = rows,
         discount_row = discount_rows(receipt),
-        subtotal = escape_html(&format_amount(receipt.subtotal_minor, &receipt.currency_code)),
+        subtotal = escape_html(&format_amount(
+            receipt.subtotal_minor,
+            &receipt.currency_code
+        )),
         tax = escape_html(&format_amount(receipt.tax_minor, &receipt.currency_code)),
         total = escape_html(&format_amount(receipt.total_minor, &receipt.currency_code)),
         payments = payments,
@@ -411,11 +408,7 @@ mod windows_spooler {
             ph_printer: *mut isize,
             p_default: *mut c_void,
         ) -> i32;
-        fn StartDocPrinterW(
-            h_printer: isize,
-            p_doc_info: *mut c_void,
-            p_job_id: *mut u32,
-        ) -> i32;
+        fn StartDocPrinterW(h_printer: isize, p_doc_info: *mut c_void, p_job_id: *mut u32) -> i32;
         fn WritePrinter(
             h_printer: isize,
             p_buffer: *const c_void,
@@ -454,7 +447,11 @@ mod windows_spooler {
     }
 
     /// Send raw bytes to a named printer.
-    pub fn print_raw(printer_name: &str, document_name: &str, payload: &[u8]) -> Result<(), String> {
+    pub fn print_raw(
+        printer_name: &str,
+        document_name: &str,
+        payload: &[u8],
+    ) -> Result<(), String> {
         let mut printer: isize = 0;
         let name: Vec<u16> = printer_name
             .encode_utf16()
@@ -476,7 +473,10 @@ mod windows_spooler {
         document_name: &str,
         payload: &[u8],
     ) -> Result<(), String> {
-        let mut doc_name: Vec<u16> = document_name.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut doc_name: Vec<u16> = document_name
+            .encode_utf16()
+            .chain(std::iter::once(0))
+            .collect();
         let mut datatype: Vec<u16> = "RAW".encode_utf16().chain(std::iter::once(0)).collect();
         let mut doc_info = DocInfo1W {
             p_doc_name: doc_name.as_mut_ptr(),
@@ -484,7 +484,9 @@ mod windows_spooler {
             p_datatype: datatype.as_mut_ptr(),
         };
         let mut job_id: u32 = 0;
-        let ok = unsafe { StartDocPrinterW(printer, &mut doc_info as *mut _ as *mut c_void, &mut job_id) };
+        let ok = unsafe {
+            StartDocPrinterW(printer, &mut doc_info as *mut _ as *mut c_void, &mut job_id)
+        };
         if ok == 0 {
             return Err("PRINTER_JOB_FAILED".to_string());
         }
@@ -515,12 +517,20 @@ pub use windows_spooler::{default_printer, print_raw};
 
 /// Print a receipt on the default Windows printer.
 #[cfg(windows)]
-pub fn print_receipt(receipt: &ReceiptData, width: usize, mode: PrintMode) -> Result<PrintOutcome, String> {
+pub fn print_receipt(
+    receipt: &ReceiptData,
+    width: usize,
+    mode: PrintMode,
+) -> Result<PrintOutcome, String> {
     match mode {
         PrintMode::Direct => {
             let printer = default_printer()?;
             let payload = render_text(receipt, width);
-            print_raw(&printer, &format!("Invoice {}", receipt.invoice_no), payload.as_bytes())?;
+            print_raw(
+                &printer,
+                &format!("Invoice {}", receipt.invoice_no),
+                payload.as_bytes(),
+            )?;
             Ok(PrintOutcome {
                 printed: true,
                 mode: "direct".to_string(),
