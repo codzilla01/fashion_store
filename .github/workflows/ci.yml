@@ -238,3 +238,24 @@ jobs:
           name: naseej-pos-windows-installer
           path: apps/pos-desktop/src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
+
+  rustfmt-report:
+    name: rustfmt diff report
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: Collect rustfmt diffs
+        run: |
+          mkdir -p fmt-report
+          for crate in crates/license-format tools/license-issuer apps/pos-desktop/src-tauri apps/activation-tool/src-tauri; do
+            name=$(echo "$crate" | tr '/' '_')
+            (cd "$crate" && cargo fmt --check --diff) > "fmt-report/${name}.diff" 2>&1 || true
+          done
+          cat fmt-report/*.diff || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustfmt-diffs
+          path: fmt-report/
