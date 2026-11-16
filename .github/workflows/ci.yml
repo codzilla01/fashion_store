@@ -121,6 +121,7 @@ jobs:
 
       - name: Check activation tool crate
         working-directory: apps/activation-tool/src-tauri
+        run: |
           set +e
           cargo check --all-targets > /tmp/act.log 2>&1
           status=$?
@@ -134,6 +135,7 @@ jobs:
         working-directory: apps/pos-desktop/src-tauri
         env:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+        run: |
           set +e
           cargo check --all-targets > /tmp/pos.log 2>&1
           status=$?
@@ -162,6 +164,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/pos-desktop/src-tauri
+
+      - name: Create placeholder frontend dist for Tauri codegen
+        run: |
+          mkdir -p apps/pos-desktop/dist
+          echo '<!doctype html><title>placeholder</title>' > apps/pos-desktop/dist/index.html
 
       - name: Run Windows integration tests
         working-directory: apps/pos-desktop/src-tauri
