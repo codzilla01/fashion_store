@@ -89,6 +89,12 @@ jobs:
             build-essential \
             perl
 
+      - name: Create placeholder frontend dist for Tauri codegen
+        run: |
+          mkdir -p apps/pos-desktop/dist apps/activation-tool/dist
+          echo '<!doctype html><title>placeholder</title>' > apps/pos-desktop/dist/index.html
+          echo '<!doctype html><title>placeholder</title>' > apps/activation-tool/dist/index.html
+
       - name: Check formatting
         working-directory: crates/license-format
         run: cargo fmt --check
@@ -115,10 +121,12 @@ jobs:
 
       - name: Check activation tool crate
         working-directory: apps/activation-tool/src-tauri
-        run: |
-          cargo check --all-targets 2>&1 | tee /tmp/act.log
-          if grep -qE "^error" /tmp/act.log; then
-            grep -E -A 12 "^error" /tmp/act.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
+          set +e
+          cargo check --all-targets > /tmp/act.log 2>&1
+          status=$?
+          cat /tmp/act.log
+          if [ $status -ne 0 ]; then
+            grep -E -A 12 '^error' /tmp/act.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           fi
 
@@ -126,10 +134,12 @@ jobs:
         working-directory: apps/pos-desktop/src-tauri
         env:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
-        run: |
-          cargo check --all-targets 2>&1 | tee /tmp/pos.log
-          if grep -qE "^error" /tmp/pos.log; then
-            grep -E -A 12 "^error" /tmp/pos.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
+          set +e
+          cargo check --all-targets > /tmp/pos.log 2>&1
+          status=$?
+          cat /tmp/pos.log
+          if [ $status -ne 0 ]; then
+            grep -E -A 12 '^error' /tmp/pos.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           fi
 
@@ -158,9 +168,12 @@ jobs:
         env:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
         run: |
-          cargo test --all-targets 2>&1 | tee /tmp/win.log
-          if grep -qE "^error" /tmp/win.log; then
-            grep -E -A 12 "^error" /tmp/win.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
+          set +e
+          cargo test --all-targets > /tmp/win.log 2>&1
+          status=$?
+          cat /tmp/win.log
+          if [ $status -ne 0 ]; then
+            grep -E -A 12 '^error' /tmp/win.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           fi
 
@@ -194,9 +207,12 @@ jobs:
         env:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: ${{ secrets.NASEEJ_LICENSE_PUBLIC_KEY_HEX }}
         run: |
-          npm run tauri build -- --bundles nsis 2>&1 | tee /tmp/bundle.log
-          if grep -qE "^error" /tmp/bundle.log; then
-            grep -E "^error" /tmp/bundle.log | head -30 | while read -r l; do echo "::error::$l"; done
+          set +e
+          npm run tauri build -- --bundles nsis > /tmp/bundle.log 2>&1
+          status=$?
+          cat /tmp/bundle.log
+          if [ $status -ne 0 ]; then
+            grep -E -A 12 '^error' /tmp/bundle.log | head -80 | while IFS= read -r l; do echo "::error::$l"; done
             exit 1
           fi
 
