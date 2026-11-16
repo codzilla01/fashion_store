@@ -495,6 +495,186 @@ pub struct ProfitSummary {
     pub margin_bps: i64,
 }
 
+/// Load the stored data of an invoice so it can be printed.
+///
+/// Printing reads straight from the encrypted database, so a receipt can be
+/// reprinted long after the sale and without an open session.
+fn load_receipt_data(
+    state: &AppState,
+    db: &Connection,
+    branch_id: &str,
+    invoice_id: &str,
+) -> Result<crate::printing::ReceiptData, String> {
+    //  0 invoice_no          1 currency_code      2 subtotal_minor
+    //  3 item_discount      4 invoice_discount    5 tax_minor
+    //  6 total_minor        7 tax_rate_bps        8 prices_include_tax
+    //  9 created_at        10 branch_name_ar     11 branch_name_en
+    // 12 cashier_name      13 customer_name_ciphertext
+    let receipt = db
+        .query_row(
+            "SELECT i.invoice_no, i.currency_code, i.subtotal_minor, i.item_discount_minor,
+                    i.invoice_discount_minor, i.tax_minor, i.total_minor, i.tax_rate_bps,
+                    i.prices_include_tax, i.created_at, b.name_ar, b.name_en,
+                    COALESCE(u.display_name,''), c.name_ciphertext
+             FROM invoices i
+             JOIN branches b ON b.id=i.branch_id
+             JOIN users u ON u.id=i.cashier_user_id
+             LEFT JOIN customers c ON c.branch_id=i.branch_id AND c.id=i.customer_id
+             WHERE i.branch_id=?1 AND i.id=?2",
+            params![branch_id, invoice_id],
+            |row| {
+                Ok(crate::printing::ReceiptData {
+                    invoice_no: row.get(0)?,
+                    branch_name_ar: row.get(10)?,
+                    branch_name_en: row.get(11)?,
+                    currency_code: row.get(1)?,
+                    cashier_name: row.get(12)?,
+                    created_at_utc: row.get(9)?,
+                    customer_name: None,
+                    subtotal_minor: row.get(2)?,
+                    item_discount_minor: row.get(3)?,
+                    invoice_discount_minor: row.get(4)?,
+                    tax_minor: row.get(5)?,
+                    total_minor: row.get(6)?,
+                    tax_rate_bps: row.get(7)?,
+                    prices_include_tax: row.get::<_, i64>(8)? != 0,
+                    lines: Vec::new(),
+                    payments: Vec::new(),
+                })
+            },
+        )
+        .map_err(|_| "INVOICE_NOT_FOUND".to_string())?;
+
+    let customer_name: Option<String> = db
+        .query_row(
+            "SELECT c.name_ciphertext FROM invoices i
+             JOIN customers c ON c.branch_id=i.branch_id AND c.id=i.customer_id
+             WHERE i.branch_id=?1 AND i.id=?2",
+            params![branch_id, invoice_id],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()
+        .map_err(|_| "INVOICE_NOT_FOUND".to_string())?
+        .flatten()
+        .map(|blob| {
+            db::decrypt_personal_field(&state.personal_data_key, &blob)
+                .ok()
+                .and_then(|clear| String::from_utf8(clear).ok())
+        })
+        .flatten();
+
+    let lines = {
+        let mut statement = db
+            .prepare(
+                "SELECT product_name_ar_snapshot, product_name_en_snapshot, sku_snapshot,
+                        size_snapshot, color_snapshot, quantity, unit_price_minor,
+                        line_discount_minor, tax_minor, line_total_minor
+                 FROM invoice_lines WHERE branch_id=?1 AND invoice_id=?2
+                 ORDER BY product_name_ar_snapshot, id",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![branch_id, invoice_id], |row| {
+                let ar: String = row.get(0)?;
+                let en: String = row.get(1)?;
+                Ok(crate::printing::ReceiptLine {
+                    product: if ar.is_empty() { en } else { ar },
+                    quantity: row.get::<_, i64>(5)? as u32,
+                    unit_price_minor: row.get(6)?,
+                    discount_minor: row.get(7)?,
+                    tax_minor: row.get(8)?,
+                    total_minor: row.get(9)?,
+                    sku: row.get(2)?,
+                    size: row.get(3)?,
+                    color: row.get(4)?,
+                })
+            })
+            .map_err(db_error)?;
+        let mut collected = Vec::new();
+        for row in rows {
+            collected.push(row.map_err(db_error)?);
+        }
+        collected
+    };
+
+    let payments = {
+        let mut statement = db
+            .prepare(
+                "SELECT method, amount_minor FROM payments
+                 WHERE branch_id=?1 AND invoice_id=?2 ORDER BY created_at, id",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![branch_id, invoice_id], |row| {
+                Ok(crate::printing::ReceiptPayment {
+                    method: row.get(0)?,
+                    amount_minor: row.get(1)?,
+                })
+            })
+            .map_err(db_error)?;
+        let mut collected = Vec::new();
+        for row in rows {
+            collected.push(row.map_err(db_error)?);
+        }
+        collected
+    };
+
+    let mut receipt = receipt;
+    receipt.lines = lines;
+    receipt.payments = payments;
+    receipt.customer_name = customer_name;
+    Ok(receipt)
+}
+
+/// Print the receipt of a completed invoice.
+///
+/// `mode` selects between sending straight to the default printer and opening
+/// the system print dialog.
+#[tauri::command]
+pub fn print_invoice(
+    state: tauri::State<'_, AppState>,
+    session_token: String,
+    invoice_id: String,
+    mode: Option<String>,
+    paper: Option<String>,
+) -> Result<crate::printing::PrintOutcome, String> {
+    let session = require_permission(&state, &session_token, "sales.read")?;
+    let db = state.db.lock().map_err(|_| "DB_LOCK_FAILED".to_string())?;
+    let receipt = load_receipt_data(&state, &db, &session.branch_id, &invoice_id)?;
+    drop(db);
+
+    let width = match paper.as_deref() {
+        Some("80") => crate::printing::WIDTH_80,
+        _ => crate::printing::WIDTH_58,
+    };
+    let print_mode = match mode.as_deref() {
+        Some("dialog") => crate::printing::PrintMode::Dialog,
+        _ => crate::printing::PrintMode::Direct,
+    };
+    crate::printing::print_receipt(&receipt, width, print_mode)
+}
+
+/// Render the receipt of an invoice as text, without sending it to a printer.
+///
+/// This is used by the on-screen receipt preview and by the tests.
+#[tauri::command]
+pub fn preview_invoice_receipt(
+    state: tauri::State<'_, AppState>,
+    session_token: String,
+    invoice_id: String,
+    paper: Option<String>,
+) -> Result<String, String> {
+    let session = require_permission(&state, &session_token, "sales.read")?;
+    let db = state.db.lock().map_err(|_| "DB_LOCK_FAILED".to_string())?;
+    let receipt = load_receipt_data(&state, &db, &session.branch_id, &invoice_id)?;
+    drop(db);
+    let width = match paper.as_deref() {
+        Some("80") => crate::printing::WIDTH_80,
+        _ => crate::printing::WIDTH_58,
+    };
+    Ok(crate::printing::render_text(&receipt, width))
+}
+
 #[tauri::command]
 pub fn get_license_status(state: tauri::State<'_, AppState>) -> crate::license::LicenseStatus {
     let mut status = crate::license::current_status(&state);

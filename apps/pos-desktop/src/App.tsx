@@ -257,6 +257,7 @@ function App() {
   const [salesToday, setSalesToday] = useState(724000);
   const [invoiceCount, setInvoiceCount] = useState(23);
   const [lastInvoice, setLastInvoice] = useState('—');
+  const [lastInvoiceId, setLastInvoiceId] = useState<string | null>(null);
   const [isTauri, setIsTauri] = useState(() => Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__));
   const [gate, setGate] = useState<DesktopGate>(() => Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__) ? 'checking' : 'ready');
   const [sessionToken, setSessionToken] = useState('');
@@ -977,7 +978,7 @@ function App() {
       let invoiceNo = '';
       if (isTauri) {
         // Production command rechecks session, price, tax, stock and permissions in Rust.
-        const result = await invoke<{ invoiceNo: string }>('create_sale', {
+        const result = await invoke<{ invoiceNo: string; invoiceId?: string }>('create_sale', {
           sessionToken,
           request: {
             idempotency_key: crypto.randomUUID(),
@@ -989,6 +990,7 @@ function App() {
           },
         });
         invoiceNo = result.invoiceNo;
+        setLastInvoiceId(result.invoiceId ?? null);
         await loadNativeCatalog(sessionToken);
       } else {
         // Browser preview intentionally demonstrates only the interaction flow; it does not persist a real sale.
@@ -1004,6 +1006,44 @@ function App() {
       showNotice(`${t.saleDone} · ${invoiceNo}`, 'success');
     } catch {
       showNotice('تعذر إتمام البيع. لم يتم تغيير المخزون؛ أعد المحاولة أو اتصل بالمدير.');
+    }
+  }
+
+  async function printLastInvoice() {
+    if (!lastInvoiceId) {
+      showNotice(t.needItems, 'error');
+      return;
+    }
+    if (!isTauri) {
+      showNotice(lang === 'ar' ? 'الطباعة متاحة في تطبيق سطح المكتب فقط.' : 'Printing is available in the desktop app only.', 'error');
+      return;
+    }
+    try {
+      const outcome = await invoke<{ printed: boolean; mode: string; printer: string | null; detail: string }>('print_invoice', {
+        sessionToken,
+        invoiceId: lastInvoiceId,
+        mode: 'direct',
+        paper: '58',
+      });
+      if (outcome.printed) {
+        showNotice(lang === 'ar' ? `تم إرسال الفاتورة إلى ${outcome.printer ?? 'الطابعة'}.` : `Receipt sent to ${outcome.printer ?? 'the printer'}.`, 'success');
+      } else {
+        showNotice(t.printFailed, 'error');
+      }
+    } catch (error) {
+      // Fall back to the print dialog, which works with drivers that cannot
+      // accept a raw byte stream.
+      try {
+        await invoke('print_invoice', {
+          sessionToken,
+          invoiceId: lastInvoiceId,
+          mode: 'dialog',
+          paper: '58',
+        });
+        showNotice(lang === 'ar' ? 'تم فتح نافذة الطباعة.' : 'Print dialog opened.', 'success');
+      } catch {
+        showNotice(`${t.printFailed} (${String(error)})`, 'error');
+      }
     }
   }
 
@@ -1189,7 +1229,7 @@ function App() {
 
               <div className="totals-block"><div className="total-row"><span>{t.subtotal}</span><span>{money(totals.subtotal, lang)}</span></div><div className="total-row discount-total"><span>{t.discounts}</span><span>− {money(totals.discount, lang)}</span></div><div className="total-row"><span>{t.tax}</span><span>{money(totals.tax, lang)}</span></div><div className="total-row due-row"><strong>{t.total}</strong><strong>{money(totals.total, lang)}</strong></div></div>
               <button className="checkout-button" onClick={completeSale} disabled={!cart.length}><span className="checkout-check"><Icon name="check" size={18} /></span><span>{t.complete}</span><strong>{money(totals.total, lang)}</strong></button>
-              <button className="print-button" onClick={() => showNotice(lastInvoice === '—' ? t.needItems : t.printFailed, lastInvoice === '—' ? 'error' : 'success')}><Icon name="printer" size={16} />{t.print}<kbd>F4</kbd></button>
+              <button className="print-button" onClick={() => void printLastInvoice()} disabled={!lastInvoiceId}><Icon name="printer" size={16} />{t.print}<kbd>F4</kbd></button>
             </aside>
           </div>
 

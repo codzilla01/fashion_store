@@ -10,6 +10,7 @@ pub mod backup;
 pub mod commands;
 pub mod db;
 pub mod license;
+pub mod printing;
 
 /// Re-exported so integration tests can query the encrypted database
 /// without adding a second `rusqlite` dependency.

@@ -49,6 +49,8 @@ fn main() {
             naseej_pos::commands::create_encrypted_backup,
             naseej_pos::commands::restore_encrypted_backup,
             naseej_pos::commands::get_backup_history,
+            naseej_pos::commands::print_invoice,
+            naseej_pos::commands::preview_invoice_receipt,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Naseej POS");

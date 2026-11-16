@@ -94,6 +94,21 @@ jobs:
             build-essential \
             perl
 
+      - name: Use Strawberry Perl for the vendored OpenSSL build
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # The vendored OpenSSL build (SQLCipher) needs a full Perl. Git Bash
+          # prepends its own MSYS perl, which lacks Locale::Maketext::Simple,
+          # so Strawberry Perl has to be pushed to the front of PATH.
+          for candidate in "/c/Strawberry/perl/bin" "/c/Strawberry/bin"; do
+            if [ -d "$candidate" ]; then
+              echo "${candidate}" | sed 's|^/c/|C:/|' >> "$GITHUB_PATH"
+              break
+            fi
+          done
+          echo "perl resolves to: $(command -v perl || true)"
+
       - name: Create placeholder frontend dist for Tauri codegen
         run: |
           mkdir -p apps/pos-desktop/dist apps/activation-tool/dist
@@ -200,6 +215,21 @@ jobs:
         with:
           workspaces: apps/pos-desktop/src-tauri
 
+      - name: Use Strawberry Perl for the vendored OpenSSL build
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # The vendored OpenSSL build (SQLCipher) needs a full Perl. Git Bash
+          # prepends its own MSYS perl, which lacks Locale::Maketext::Simple,
+          # so Strawberry Perl has to be pushed to the front of PATH.
+          for candidate in "/c/Strawberry/perl/bin" "/c/Strawberry/bin"; do
+            if [ -d "$candidate" ]; then
+              echo "${candidate}" | sed 's|^/c/|C:/|' >> "$GITHUB_PATH"
+              break
+            fi
+          done
+          echo "perl resolves to: $(command -v perl || true)"
+
       - name: Create placeholder frontend dist for Tauri codegen
         run: |
           mkdir -p apps/pos-desktop/dist
@@ -264,6 +294,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/pos-desktop/src-tauri
+
+      - name: Use Strawberry Perl for the vendored OpenSSL build
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          # The vendored OpenSSL build (SQLCipher) needs a full Perl. Git Bash
+          # prepends its own MSYS perl, which lacks Locale::Maketext::Simple,
+          # so Strawberry Perl has to be pushed to the front of PATH.
+          for candidate in "/c/Strawberry/perl/bin" "/c/Strawberry/bin"; do
+            if [ -d "$candidate" ]; then
+              echo "${candidate}" | sed 's|^/c/|C:/|' >> "$GITHUB_PATH"
+              break
+            fi
+          done
+          echo "perl resolves to: $(command -v perl || true)"
 
       - name: Install frontend dependencies
         working-directory: apps/pos-desktop
