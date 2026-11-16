@@ -56,6 +56,9 @@ jobs:
   rust:
     name: Rust ${{ matrix.target }}
     runs-on: ${{ matrix.target == 'windows-msvc' && 'windows-latest' || 'ubuntu-latest' }}
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -156,6 +159,9 @@ jobs:
   windows-tests:
     name: Windows SQLCipher / DPAPI integration tests
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -188,6 +194,9 @@ jobs:
     name: Windows installer bundle
     runs-on: windows-latest
     needs: [frontend, rust]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 

@@ -208,6 +208,28 @@ pub fn validate_license_for_device(
     Ok(())
 }
 
+/// Public key baked into CI and development builds.
+///
+/// A build that carries this key cannot validate any licence issued by the
+/// production issuer, so it must never be handed to a paying customer.
+pub const PLACEHOLDER_PUBLIC_KEY_HEX: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// True when this build carries a real production licence key.
+///
+/// Returns `false` for development builds, for builds without the
+/// `NASEEJ_LICENSE_PUBLIC_KEY_HEX` environment variable, and for builds that
+/// still carry the CI placeholder key.
+pub fn is_production_key_configured() -> bool {
+    match option_env!("NASEEJ_LICENSE_PUBLIC_KEY_HEX") {
+        Some(value) => {
+            let trimmed = value.trim();
+            !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(PLACEHOLDER_PUBLIC_KEY_HEX)
+        }
+        None => false,
+    }
+}
+
 pub fn embedded_public_key() -> Result<VerifyingKey, LicenseError> {
     let encoded =
         option_env!("NASEEJ_LICENSE_PUBLIC_KEY_HEX").ok_or(LicenseError::PublicKeyNotConfigured)?;
@@ -380,5 +402,41 @@ mod tests {
             verify_license(&envelope, &signing.verifying_key()),
             Err(LicenseError::InvalidPlan)
         ));
+    }
+
+    #[test]
+    fn local_evaluation_limits_and_features_are_bounded() {
+        let features = local_trial_features();
+        assert!(features.contains(&"pos.sell".to_string()));
+        assert!(!features.is_empty());
+
+        let limits = local_trial_limits();
+        assert_eq!(limits.get("max_users"), Some(&3));
+        assert_eq!(limits.get("max_branches"), Some(&1));
+    }
+
+    #[test]
+    fn grace_period_is_a_positive_bounded_number_of_days() {
+        let days = grace_period_days();
+        assert!(days > 0, "grace period must be positive");
+        assert!(days <= 365, "grace period must stay bounded");
+    }
+
+    #[test]
+    fn placeholder_key_is_never_treated_as_a_production_key() {
+        // The CI/dev placeholder must never be reported as production ready.
+        let configured = option_env!("NASEEJ_LICENSE_PUBLIC_KEY_HEX").map(|v| v.trim());
+        if configured.is_none()
+            || configured == Some(PLACEHOLDER_PUBLIC_KEY_HEX)
+            || configured == Some("")
+        {
+            assert!(!is_production_key_configured());
+        }
+    }
+
+    #[test]
+    fn local_trial_window_is_shorter_than_a_year() {
+        assert!(LOCAL_TRIAL_DAYS > 0);
+        assert!(LOCAL_TRIAL_DAYS <= 31);
     }
 }

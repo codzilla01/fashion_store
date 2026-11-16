@@ -29,6 +29,11 @@ pub struct LicenseStatus {
     pub grace_period: bool,
     /// Instant at which the grace period ends, when one applies.
     pub grace_expires_at_utc: Option<String>,
+    /// False when this build carries no real production licence key.
+    ///
+    /// A development build must never be handed to a paying customer, so the
+    /// user interface surfaces this prominently.
+    pub production_build: bool,
 }
 
 /// Outcome of looking for a signed licence on disk.
@@ -143,6 +148,7 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
             local_trial: false,
             grace_period: false,
             grace_expires_at_utc: None,
+            production_build: naseej_license_format::is_production_key_configured(),
         }),
         Err(error) => {
             let code = match error {
@@ -178,6 +184,7 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
                             local_trial: false,
                             grace_period: true,
                             grace_expires_at_utc: Some(grace_end.to_rfc3339()),
+                            production_build: naseej_license_format::is_production_key_configured(),
                         });
                     }
                 }
@@ -212,6 +219,7 @@ fn local_trial_status(state: &crate::AppState, fingerprint: String) -> Result<Li
             local_trial: true,
             grace_period: false,
             grace_expires_at_utc: None,
+            production_build: naseej_license_format::is_production_key_configured(),
         });
     }
     if now < grace_expires {
@@ -229,6 +237,7 @@ fn local_trial_status(state: &crate::AppState, fingerprint: String) -> Result<Li
             local_trial: true,
             grace_period: true,
             grace_expires_at_utc: Some(grace_expires.to_rfc3339()),
+            production_build: naseej_license_format::is_production_key_configured(),
         });
     }
     Ok(empty_status("LICENSE_REQUIRED", Some(fingerprint), true))
@@ -420,6 +429,7 @@ fn empty_status(
         local_trial: false,
         grace_period: false,
         grace_expires_at_utc: None,
+        production_build: naseej_license_format::is_production_key_configured(),
     }
 }
 

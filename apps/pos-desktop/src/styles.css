@@ -475,3 +475,9 @@ kbd { font-family: inherit; border: 1px solid #e7ebe7; background: white; color:
   line-height: 1.6;
 }
 .license-banner svg { flex: 0 0 auto; }
+
+.license-banner-danger {
+  border-color: #f3d6d6;
+  background: #fdf2f2;
+  color: #9a3b3b;
+}

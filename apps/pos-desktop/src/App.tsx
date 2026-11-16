@@ -43,7 +43,7 @@ type PaymentLine = { id: string; method: PayMethod; amountMinor: number };
 type DesktopGate = 'checking' | 'license' | 'setup' | 'login' | 'tax' | 'ready' | 'error';
 type AuthResult = { sessionToken: string; displayName: string; branchId: string };
 type AppStatus = { needsOwnerSetup: boolean; taxConfigurationRequired: boolean; taxRateBps: number; pricesIncludeTax: boolean | null };
-type LicenseStatus = { valid: boolean; statusCode: string; deviceFingerprint: string | null; licenseId: string | null; customerId: string | null; planCode: string | null; expiresAtUtc: string | null; features: string[]; limits: Record<string, number>; publicKeyConfigured: boolean; localTrial: boolean; gracePeriod: boolean; graceExpiresAtUtc: string | null };
+type LicenseStatus = { valid: boolean; statusCode: string; deviceFingerprint: string | null; licenseId: string | null; customerId: string | null; planCode: string | null; expiresAtUtc: string | null; features: string[]; limits: Record<string, number>; publicKeyConfigured: boolean; localTrial: boolean; gracePeriod: boolean; graceExpiresAtUtc: string | null; productionBuild: boolean };
 type ActivationRequest = { schema_version: number; request_id: string; product: string; app_version: string; requested_at_utc: string; device_fingerprint: string };
 type WorkspaceTab = 'sale' | 'inventory' | 'products' | 'purchases' | 'reports' | 'users' | 'branches' | 'backup' | 'returns';
 type SetupOption = { id: string; code: string | null; nameAr: string; nameEn: string; colorHex: string | null; profileCode: string | null };
@@ -201,6 +201,7 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     wallet: 'M4 6.5A2.5 2.5 0 0 1 6.5 4H20v16H6.5A2.5 2.5 0 0 1 4 17.5v-11Zm0 1H20M16 13h.01',
     bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12h4',
     chevronDown: 'm6 9 6 6 6-6',
+    warning: 'M12 3 1.5 21h21L12 3Zm0 6v6m0 3v.01',
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name] ?? paths.grid} /></svg>;
 }
@@ -1081,6 +1082,17 @@ function App() {
             <div className="cashier-info"><div className="avatar">{(desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')).slice(0, 1)}</div><div className="cashier-copy"><strong>{desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')}</strong><small>{t.cashier} · {t.shift}</small></div><Icon name="chevronDown" size={14} /></div>
           </div>
         </header>
+
+        {licenseStatus && !licenseStatus.productionBuild && (
+          <div className="license-banner license-banner-danger" role="alert">
+            <Icon name="warning" size={16} />
+            <span>
+              {lang === 'ar'
+                ? 'نسخة تطوير بدون مفتاح ترخيص إنتاجي — لا تُوزَّع على العملاء.'
+                : 'Development build without a production licence key — do not distribute to customers.'}
+            </span>
+          </div>
+        )}
 
         {licenseStatus && (licenseStatus.localTrial || licenseStatus.gracePeriod) && (
           <div className="license-banner" role="status">
