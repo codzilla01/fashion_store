@@ -56,6 +56,8 @@ jobs:
   rust:
     name: Rust ${{ matrix.target }}
     runs-on: ${{ matrix.target == 'windows-msvc' && 'windows-latest' || 'ubuntu-latest' }}
+    permissions:
+      contents: write
     defaults:
       run:
         shell: bash
@@ -150,8 +152,6 @@ jobs:
 
       - name: Publish build diagnostics on the commit
         if: failure()
-        permissions:
-          contents: write
         run: |
           {
             echo "### Build diagnostics — ${{ matrix.target }}"
@@ -182,6 +182,8 @@ jobs:
   windows-tests:
     name: Windows SQLCipher / DPAPI integration tests
     runs-on: windows-latest
+    permissions:
+      contents: write
     defaults:
       run:
         shell: bash
@@ -215,8 +217,6 @@ jobs:
 
       - name: Publish build diagnostics on the commit
         if: failure()
-        permissions:
-          contents: write
         run: |
           {
             echo "### Windows integration test diagnostics"
@@ -234,6 +234,8 @@ jobs:
     name: Windows installer bundle
     runs-on: windows-latest
     needs: [frontend, rust]
+    permissions:
+      contents: write
     defaults:
       run:
         shell: bash
@@ -281,8 +283,6 @@ jobs:
 
       - name: Publish build diagnostics on the commit
         if: failure()
-        permissions:
-          contents: write
         run: |
           {
             echo "### Installer bundle diagnostics"
