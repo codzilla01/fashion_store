@@ -239,23 +239,35 @@ jobs:
           path: apps/pos-desktop/src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
 
-  rustfmt-report:
-    name: rustfmt diff report
+  rustfmt-autofix:
+    name: Apply rustfmt
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - name: Collect rustfmt diffs
+
+      - name: Run rustfmt on every crate
         run: |
-          mkdir -p fmt-report
           for crate in crates/license-format tools/license-issuer apps/pos-desktop/src-tauri apps/activation-tool/src-tauri; do
-            name=$(echo "$crate" | tr '/' '_')
-            (cd "$crate" && cargo fmt --check --diff) > "fmt-report/${name}.diff" 2>&1 || true
+            echo "--- formatting $crate"
+            (cd "$crate" && cargo fmt)
           done
-          cat fmt-report/*.diff || true
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rustfmt-diffs
-          path: fmt-report/
+
+      - name: Commit and push formatting changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "No formatting changes needed."
+            exit 0
+          fi
+          git add -A
+          git commit -m "style: apply rustfmt"
+          git push origin "HEAD:${{ github.ref_name }}"
