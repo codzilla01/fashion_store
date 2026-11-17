@@ -9,6 +9,9 @@ dist-ssr/
 target/
 **/target/
 
+# TypeScript incremental build state
+*.tsbuildinfo
+
 # Python
 __pycache__/
 *.py[cod]
