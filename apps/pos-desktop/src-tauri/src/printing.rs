@@ -141,7 +141,10 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
         out.push_str(&centre(&receipt.branch_name_en, width));
         out.push('\n');
     }
-    out.push_str(&centre(&format!("فاتورة / Invoice {invoice_no}"), width));
+    out.push_str(&centre(
+        &format!("فاتورة / Invoice {}", receipt.invoice_no),
+        width,
+    ));
     out.push('\n');
     out.push_str(&separator);
     out.push('\n');
@@ -156,17 +159,14 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
     ));
     out.push('\n');
     if let Some(customer) = &receipt.customer_name {
-        out.push_str(&format!("{:<16}{customer:>16}", "العميل / Customer"));
+        out.push_str(&format!("{:<16}{:>16}", "العميل / Customer", customer));
         out.push('\n');
     }
     out.push_str(&separator);
     out.push('\n');
 
     for line in &receipt.lines {
-        let product = line.product.clone();
-        let size = line.size.clone();
-        let color = line.color.clone();
-        let title = format!("{product} | {size} | {color}");
+        let title = format!("{} | {} | {}", line.product, line.size, line.color);
         for chunk in wrap(&title, width) {
             out.push_str(&chunk);
             out.push('\n');
@@ -175,7 +175,7 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
         out.push_str(&format!(
             "  {:>3} x {:<12}{:>10}",
             line.quantity,
-            { unit },
+            unit,
             format_amount(line.total_minor, &receipt.currency_code)
         ));
         out.push('\n');
@@ -269,8 +269,7 @@ fn centre(text: &str, width: usize) -> String {
         return text.chars().take(width).collect();
     }
     let padding = (width - length) / 2;
-    let padding_text = " ".repeat(padding);
-    format!("{padding_text}{text}")
+    format!("{}{}", " ".repeat(padding), text)
 }
 
 /// Render the receipt as a printable HTML document.
@@ -529,7 +528,7 @@ pub fn print_receipt(
             let payload = render_text(receipt, width);
             print_raw(
                 &printer,
-                &format!("Invoice {invoice_no}"),
+                &format!("Invoice {}", receipt.invoice_no),
                 payload.as_bytes(),
             )?;
             Ok(PrintOutcome {
@@ -555,7 +554,7 @@ pub fn print_receipt(
 ) -> Result<PrintOutcome, String> {
     let text = render_text(receipt, width);
     let directory = std::env::temp_dir();
-    let path = directory.join(format!("naseej-receipt-{invoice_no}.txt"));
+    let path = directory.join(format!("naseej-receipt-{}.txt", receipt.invoice_no));
     std::fs::write(&path, text.as_bytes()).map_err(|_| "PRINT_WRITE_FAILED".to_string())?;
     Ok(PrintOutcome {
         printed: false,
@@ -575,7 +574,7 @@ fn print_via_dialog(receipt: &ReceiptData, width: usize) -> Result<PrintOutcome,
 
     let directory = std::env::temp_dir().join("NaseejPOS").join("receipts");
     std::fs::create_dir_all(&directory).map_err(|_| "PRINT_DIR_FAILED".to_string())?;
-    let path: PathBuf = directory.join(format!("receipt-{invoice_no}.html"));
+    let path: PathBuf = directory.join(format!("receipt-{}.html", receipt.invoice_no));
     std::fs::write(&path, render_html(receipt, width).as_bytes())
         .map_err(|_| "PRINT_WRITE_FAILED".to_string())?;
 
