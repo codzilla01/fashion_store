@@ -290,6 +290,9 @@ jobs:
           # Makes the storage layer report each step, so a failure names the
           # exact operation instead of only the test.
           NASEEJ_TRACE: "1"
+          # SQLCipher and the SQLite backup API recurse; the default test
+          # thread stack is too small for that on Windows.
+          RUST_MIN_STACK: "33554432"
         run: |
           set +e
           # Git Bash puts its own MSYS perl first on PATH, and that perl

@@ -14,6 +14,18 @@ const MIGRATION_0003: &str = include_str!("../migrations/0003_local_trial_state.
 pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 const BRANCH_ID: &str = "00000000-0000-4000-8000-000000000001";
 
+/// The SQLCipher 4 settings used for every database this application opens.
+///
+/// `cipher_compatibility` is deliberately not used: it is a migration pragma
+/// that makes SQLCipher re-derive the key, which does not fit the raw random
+/// key this application stores under Windows DPAPI. The values below are the
+/// SQLCipher 4 defaults, stated explicitly so the on-disk format does not
+/// depend on the library version.
+const CIPHER_SETTINGS: &str = "PRAGMA cipher_page_size = 4096;
+         PRAGMA kdf_iter = 256000;
+         PRAGMA cipher_hmac_algorithm = HMAC_SHA512;
+         PRAGMA cipher_kdf_algorithm = PBKDF2_HMAC_SHA512;";
+
 /// Emit a diagnostic line when `NASEEJ_TRACE` is set.
 ///
 /// The Windows integration test turns this on so a failure names the exact
@@ -34,10 +46,11 @@ pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
 
     trace("open_database: reading the protected key");
     let mut key = load_or_create_database_key(&protected_key_path)?;
-    trace("open_database: opening the database file");
+    trace("open_database: key loaded");
     let connection = Connection::open(&database_path).map_err(|e| format!("DB_OPEN:{e}"))?;
-    trace("open_database: applying the cipher settings");
+    trace("open_database: database file opened");
     let key_hex = hex::encode(&key);
+    trace("open_database: applying the cipher settings");
     // The generated key is hex-only, so this PRAGMA cannot carry user input.
     //
     // The cipher settings are applied before the key: SQLCipher finalises the
@@ -45,13 +58,13 @@ pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
     // re-derive the key instead of using the raw key.
     connection
         .execute_batch(&format!(
-            "PRAGMA cipher_compatibility = 4;
-         PRAGMA cipher_memory_security = ON;
+            "{CIPHER_SETTINGS}
          PRAGMA key = \"x'{key_hex}'\";"
         ))
         .map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     key.zeroize();
 
+    trace("open_database: cipher settings applied");
     trace("open_database: verifying SQLCipher");
     // Reading the schema is intentional: it verifies that the key opened an encrypted database.
     let cipher_version: String = connection
@@ -207,7 +220,9 @@ pub fn set_sqlcipher_key_with(
     // The cipher is configured before the key so SQLCipher uses the raw key
     // as given instead of re-deriving one.
     connection.execute_batch(&format!(
-        "PRAGMA cipher_compatibility = 4;\n         PRAGMA cipher_memory_security = {memory_security};\n         PRAGMA key = \"x'{key_hex}'\";"
+        "{CIPHER_SETTINGS}
+         PRAGMA cipher_memory_security = {memory_security};
+         PRAGMA key = \"x'{key_hex}'\";"
     )).map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     let cipher_version: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
