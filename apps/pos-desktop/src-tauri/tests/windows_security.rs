@@ -45,6 +45,7 @@ fn run_with_large_stack(body: impl FnOnce() + Send + 'static) {
 
 #[test]
 fn opens_an_encrypted_database_and_reports_sqlcipher() {
+    eprintln!("[cipher] opening the database");
     let directory = temp_dir("cipher");
     let connection = db::open_database(&directory).expect("database opens");
 

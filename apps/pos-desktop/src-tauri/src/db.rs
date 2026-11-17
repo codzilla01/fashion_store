@@ -14,6 +14,16 @@ const MIGRATION_0003: &str = include_str!("../migrations/0003_local_trial_state.
 pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 const BRANCH_ID: &str = "00000000-0000-4000-8000-000000000001";
 
+/// Emit a diagnostic line when `NASEEJ_TRACE` is set.
+///
+/// The Windows integration test turns this on so a failure names the exact
+/// storage step instead of just the operation.
+pub fn trace(message: &str) {
+    if std::env::var_os("NASEEJ_TRACE").is_some() {
+        eprintln!("[naseej] {message}");
+    }
+}
+
 pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
     fs::create_dir_all(app_data_dir.join("media")).map_err(|e| format!("APP_DATA_DIR:{e}"))?;
     let database_path = app_data_dir.join("store.db");
@@ -22,19 +32,27 @@ pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
         fs::create_dir_all(parent).map_err(|e| format!("KEY_DIR:{e}"))?;
     }
 
+    trace("open_database: reading the protected key");
     let mut key = load_or_create_database_key(&protected_key_path)?;
+    trace("open_database: opening the database file");
     let connection = Connection::open(&database_path).map_err(|e| format!("DB_OPEN:{e}"))?;
+    trace("open_database: applying the cipher settings");
     let key_hex = hex::encode(&key);
     // The generated key is hex-only, so this PRAGMA cannot carry user input.
+    //
+    // The cipher settings are applied before the key: SQLCipher finalises the
+    // cipher when the key is set, so configuring it afterwards makes SQLCipher
+    // re-derive the key instead of using the raw key.
     connection
         .execute_batch(&format!(
-            "PRAGMA key = \"x'{key_hex}'\";
-         PRAGMA cipher_compatibility = 4;
-         PRAGMA cipher_memory_security = ON;"
+            "PRAGMA cipher_compatibility = 4;
+         PRAGMA cipher_memory_security = ON;
+         PRAGMA key = \"x'{key_hex}'\";"
         ))
         .map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     key.zeroize();
 
+    trace("open_database: verifying SQLCipher");
     // Reading the schema is intentional: it verifies that the key opened an encrypted database.
     let cipher_version: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
@@ -54,10 +72,14 @@ pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
         )
         .map_err(|e| format!("DB_PRAGMA:{e}"))?;
 
-    apply_migrations(connection)
+    trace("open_database: applying migrations");
+    let connection = apply_migrations(connection)?;
+    trace("open_database: ready");
+    Ok(connection)
 }
 
 fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
+    trace("migrations: checking the schema version");
     let migration_table_exists: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",
         [], |row| row.get(0),
@@ -103,6 +125,7 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
     }
 
     if version < 2 {
+        trace("migrations: applying migration 0002");
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Exclusive)
             .map_err(|e| format!("MIGRATION_0002_BEGIN:{e}"))?;
@@ -122,6 +145,7 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
         version = 2;
     }
     if version < 3 {
+        trace("migrations: applying migration 0003");
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Exclusive)
             .map_err(|e| format!("MIGRATION_0003_BEGIN:{e}"))?;
@@ -180,8 +204,10 @@ pub fn set_sqlcipher_key_with(
 ) -> Result<(), String> {
     let key_hex = hex::encode(key);
     let memory_security = if memory_security { "ON" } else { "OFF" };
+    // The cipher is configured before the key so SQLCipher uses the raw key
+    // as given instead of re-deriving one.
     connection.execute_batch(&format!(
-        "PRAGMA key = \"x'{key_hex}'\";\n         PRAGMA cipher_compatibility = 4;\n         PRAGMA cipher_memory_security = {memory_security};"
+        "PRAGMA cipher_compatibility = 4;\n         PRAGMA cipher_memory_security = {memory_security};\n         PRAGMA key = \"x'{key_hex}'\";"
     )).map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     let cipher_version: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))

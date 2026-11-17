@@ -287,6 +287,9 @@ jobs:
         working-directory: apps/pos-desktop/src-tauri
         env:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+          # Makes the storage layer report each step, so a failure names the
+          # exact operation instead of only the test.
+          NASEEJ_TRACE: "1"
         run: |
           set +e
           # Git Bash puts its own MSYS perl first on PATH, and that perl
