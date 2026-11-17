@@ -631,36 +631,36 @@ mod tests {
             cashier_name: "Mariam Hassan".to_string(),
             created_at_utc: "2026-11-16T10:00:00Z".to_string(),
             customer_name: Some("Ahmed".to_string()),
-            subtotal_minor: 100_00,
-            item_discount_minor: 5_00,
+            subtotal_minor: 10_000,
+            item_discount_minor: 500,
             invoice_discount_minor: 0,
-            tax_minor: 14_00,
-            total_minor: 109_00,
-            tax_rate_bps: 1400,
+            tax_minor: 1_400,
+            total_minor: 10_900,
+            tax_rate_bps: 1_400,
             prices_include_tax: false,
             lines: vec![ReceiptLine {
                 product: "قميص".to_string(),
                 quantity: 2,
-                unit_price_minor: 50_00,
+                unit_price_minor: 5_000,
                 discount_minor: 0,
-                tax_minor: 14_00,
-                total_minor: 100_00,
+                tax_minor: 1_400,
+                total_minor: 10_000,
                 sku: "SH-M-BL".to_string(),
                 size: "M".to_string(),
                 color: "أزرق".to_string(),
             }],
             payments: vec![ReceiptPayment {
                 method: "CASH".to_string(),
-                amount_minor: 109_00,
+                amount_minor: 10_900,
             }],
         }
     }
 
     #[test]
     fn formats_amounts_with_two_decimals() {
-        assert_eq!(format_amount(100_00, "EGP"), "100.00 EGP");
+        assert_eq!(format_amount(10_000, "EGP"), "100.00 EGP");
         assert_eq!(format_amount(5, "EGP"), "0.05 EGP");
-        assert_eq!(format_amount(-20_50, "EGP"), "-20.50 EGP");
+        assert_eq!(format_amount(-2_050, "EGP"), "-20.50 EGP");
         assert_eq!(format_amount(0, "EGP"), "0.00 EGP");
     }
 

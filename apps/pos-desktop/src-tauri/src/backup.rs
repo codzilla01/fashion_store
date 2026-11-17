@@ -37,7 +37,10 @@ impl TempEncryptedDb {
         let connection = (|| {
             let connection =
                 Connection::open(&path).map_err(|_| "BACKUP_TEMP_OPEN_FAILED".to_string())?;
-            db::set_sqlcipher_key(&connection, key)?;
+            // The staging file holds no live data, so SQLCipher's memory
+            // locking is not needed here and can fail under a constrained
+            // commit limit, which breaks the copy step.
+            db::set_sqlcipher_key_with(&connection, key, false)?;
             Ok::<Connection, String>(connection)
         })();
         match connection {
@@ -191,7 +194,7 @@ pub fn prepare_restore(
     let connection = (|| {
         let connection =
             Connection::open(&temp_path).map_err(|_| "BACKUP_DATABASE_OPEN_FAILED".to_string())?;
-        db::set_sqlcipher_key(&connection, &imported_key)?;
+        db::set_sqlcipher_key_with(&connection, &imported_key, false)?;
         validate_database(&connection)?;
         Ok::<Connection, String>(connection)
     })();

@@ -15,6 +15,9 @@ use uuid::Uuid;
 const SESSION_IDLE: Duration = Duration::from_secs(5 * 60);
 const MAIN_BRANCH_CODE: &str = "MAIN";
 
+/// One season row: id, Arabic name, English name, start date, end date.
+type SeasonRow = (String, String, String, Option<String>, Option<String>);
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
@@ -556,12 +559,11 @@ fn load_receipt_data(
         .optional()
         .map_err(|_| "INVOICE_NOT_FOUND".to_string())?
         .flatten()
-        .map(|blob| {
+        .and_then(|blob| {
             db::decrypt_personal_field(&state.personal_data_key, &blob)
                 .ok()
                 .and_then(|clear| String::from_utf8(clear).ok())
-        })
-        .flatten();
+        });
 
     let lines = {
         let mut statement = db
@@ -678,11 +680,11 @@ pub fn preview_invoice_receipt(
 #[tauri::command]
 pub fn get_license_status(state: tauri::State<'_, AppState>) -> crate::license::LicenseStatus {
     let mut status = crate::license::current_status(&state);
-    if status.valid {
-        if let Err(error) = crate::license::record_trusted_time(&state, &status) {
-            status.valid = false;
-            status.status_code = error;
-        }
+    if status.valid
+        && let Err(error) = crate::license::record_trusted_time(&state, &status)
+    {
+        status.valid = false;
+        status.status_code = error;
     }
     status
 }
@@ -820,10 +822,10 @@ pub fn login(
     if active != 1 {
         return Err("LOGIN_FAILED".to_string());
     }
-    if let Some(until) = locked_until {
-        if until > Utc::now().to_rfc3339() {
-            return Err("ACCOUNT_TEMPORARILY_LOCKED".to_string());
-        }
+    if let Some(until) = locked_until
+        && until > Utc::now().to_rfc3339()
+    {
+        return Err("ACCOUNT_TEMPORARILY_LOCKED".to_string());
     }
     let parsed =
         PasswordHash::new(&password_phc).map_err(|_| "PASSWORD_HASH_INVALID".to_string())?;
@@ -1472,10 +1474,9 @@ pub fn create_product(
             .barcode
             .as_deref()
             .filter(|value| !value.trim().is_empty())
+            && (barcode.trim().len() > 64 || !barcodes.insert(barcode.trim().to_string()))
         {
-            if barcode.trim().len() > 64 || !barcodes.insert(barcode.trim().to_string()) {
-                return Err("BARCODE_DUPLICATE_OR_INVALID".to_string());
-            }
+            return Err("BARCODE_DUPLICATE_OR_INVALID".to_string());
         }
     }
 
@@ -2933,7 +2934,7 @@ fn copy_branch_catalog(
         )
         .map_err(db_error)?;
     }
-    let seasons: Vec<(String, String, String, Option<String>, Option<String>)> = {
+    let seasons: Vec<SeasonRow> = {
         let mut statement = tx
             .prepare("SELECT id,name_ar,name_en,starts_on,ends_on FROM seasons WHERE branch_id=?1")
             .map_err(db_error)?;
@@ -3848,10 +3849,10 @@ fn require_permission(state: &AppState, token: &str, permission: &str) -> Result
         "backup.manage" => Some("backup.restore"),
         _ => None,
     };
-    if let Some(feature) = required_feature {
-        if !license.features.iter().any(|licensed| licensed == feature) {
-            return Err(format!("LICENSE_FEATURE_NOT_INCLUDED:{feature}"));
-        }
+    if let Some(feature) = required_feature
+        && !license.features.iter().any(|licensed| licensed == feature)
+    {
+        return Err(format!("LICENSE_FEATURE_NOT_INCLUDED:{feature}"));
     }
     let mut sessions = state
         .sessions
@@ -3967,6 +3968,11 @@ fn rounded_signed_ratio(numerator: i128, denominator: i128) -> Result<i64, Strin
     }
 }
 
+/// Append one entry to the tamper-evident audit log.
+///
+/// The parameters mirror the `audit_log` columns one for one, which is why
+/// they are kept positional rather than grouped into a struct.
+#[allow(clippy::too_many_arguments)]
 fn insert_audit(
     tx: &Transaction<'_>,
     id: &str,
@@ -4006,9 +4012,8 @@ fn insert_audit(
 fn normalize_phone(input: &str) -> Result<String, String> {
     let mut normalized = String::new();
     for character in input.trim().chars() {
-        if character.is_ascii_digit() {
-            normalized.push(character);
-        } else if character == '+' && normalized.is_empty() {
+        // Digits are kept as they are; a leading plus sign is kept too.
+        if character.is_ascii_digit() || (character == '+' && normalized.is_empty()) {
             normalized.push(character);
         } else if matches!(character, ' ' | '-' | '(' | ')' | '.') {
             continue;

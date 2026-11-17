@@ -160,10 +160,28 @@ pub fn load_database_key(app_data_dir: &Path) -> Result<Zeroizing<[u8; 32]>, Str
     Ok(Zeroizing::new(key))
 }
 
+/// Apply the SQLCipher key to a connection.
+///
+/// `memory_security` controls SQLCipher's `cipher_memory_security`. It keeps
+/// the key material locked in RAM so it cannot be paged to disk, which
+/// matters for the live database. It is switched off for the short-lived
+/// staging databases used while building or restoring a backup: those files
+/// hold no data of their own, and SQLCipher's memory locking can fail under
+/// a constrained commit limit, which then breaks the copy step.
 pub fn set_sqlcipher_key(connection: &Connection, key: &[u8; 32]) -> Result<(), String> {
+    set_sqlcipher_key_with(connection, key, true)
+}
+
+/// Apply the SQLCipher key with an explicit memory-security setting.
+pub fn set_sqlcipher_key_with(
+    connection: &Connection,
+    key: &[u8; 32],
+    memory_security: bool,
+) -> Result<(), String> {
     let key_hex = hex::encode(key);
+    let memory_security = if memory_security { "ON" } else { "OFF" };
     connection.execute_batch(&format!(
-        "PRAGMA key = \"x'{key_hex}'\";\n         PRAGMA cipher_compatibility = 4;\n         PRAGMA cipher_memory_security = ON;"
+        "PRAGMA key = \"x'{key_hex}'\";\n         PRAGMA cipher_compatibility = 4;\n         PRAGMA cipher_memory_security = {memory_security};"
     )).map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     let cipher_version: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
@@ -217,8 +235,7 @@ fn seed_catalog_defaults(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
         tx.execute("INSERT INTO categories(id,branch_id,name_ar,name_en,sort_order) VALUES(?1,?2,?3,?4,?5)",
             rusqlite::params![id, BRANCH_ID, name_ar, name_en, sort_order]).map_err(|e| format!("SEED_CATEGORY:{e}"))?;
     }
-    let mut size_num = 201u32;
-    for (profile, code, name_ar, name_en, order) in [
+    for (index, (profile, code, name_ar, name_en, order)) in [
         ("CLOTHING", "XS", "صغير جدًا", "Extra small", 10),
         ("CLOTHING", "S", "صغير", "Small", 20),
         ("CLOTHING", "M", "متوسط", "Medium", 30),
@@ -231,11 +248,14 @@ fn seed_catalog_defaults(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
         ("NUMERIC", "32", "32", "32", 30),
         ("NUMERIC", "34", "34", "34", 40),
         ("NUMERIC", "36", "36", "36", 50),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let size_num = 201u32 + index as u32;
         let id = format!("00000000-0000-4000-8000-{size_num:012}");
         tx.execute("INSERT INTO sizes(id,branch_id,profile_code,size_code,name_ar,name_en,sort_order) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             rusqlite::params![id, BRANCH_ID, profile, code, name_ar, name_en, order]).map_err(|e| format!("SEED_SIZE:{e}"))?;
-        size_num += 1;
     }
     let colors = [
         (301, "BLACK", "أسود", "Black", "#292C32"),

@@ -29,6 +29,20 @@ fn temp_dir(label: &str) -> PathBuf {
     directory
 }
 
+/// Run a test body on a thread with a generous stack.
+///
+/// SQLCipher's key handling and the SQLite backup API both recurse, and the
+/// default test-thread stack is small enough for that recursion to overflow
+/// it. A larger stack removes the failure mode without changing behaviour.
+fn run_with_large_stack(body: impl FnOnce() + Send + 'static) {
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(body)
+        .expect("test thread starts")
+        .join()
+        .expect("test body completes");
+}
+
 #[test]
 fn opens_an_encrypted_database_and_reports_sqlcipher() {
     let directory = temp_dir("cipher");
@@ -135,48 +149,57 @@ fn personal_fields_round_trip_through_the_derived_key() {
 
 #[test]
 fn creates_and_restores_an_encrypted_backup() {
-    let directory = temp_dir("backup");
-    let connection = db::open_database(&directory).expect("database opens");
-    let destination = directory.join("exports").join("store.bkz");
+    run_with_large_stack(|| {
+        let directory = temp_dir("backup");
+        eprintln!("[backup] opening the source database");
+        let connection = db::open_database(&directory).expect("database opens");
+        let destination = directory.join("exports").join("store.bkz");
 
-    let (size, checksum) = backup::create_encrypted_backup(
-        &connection,
-        &directory,
-        &destination,
-        "correct horse battery staple",
-    )
-    .expect("backup is created");
-    assert!(size > 0, "backup must not be empty");
-    assert_eq!(checksum.len(), 64, "checksum must be a SHA-256 hex digest");
+        eprintln!("[backup] creating the encrypted container");
+        let (size, checksum) = backup::create_encrypted_backup(
+            &connection,
+            &directory,
+            &destination,
+            "correct horse battery staple",
+        )
+        .expect("backup is created");
+        assert!(size > 0, "backup must not be empty");
+        assert_eq!(checksum.len(), 64, "checksum must be a SHA-256 hex digest");
 
-    // The container must not leak the plaintext database.
-    let raw = fs::read(&destination).expect("backup file exists");
-    assert!(
-        !raw.starts_with(b"SQLite format 3\0"),
-        "backup must not contain a plain SQLite header"
-    );
+        // The container must not leak the plaintext database.
+        eprintln!("[backup] checking the container does not leak plaintext");
+        let raw = fs::read(&destination).expect("backup file exists");
+        assert!(
+            !raw.starts_with(b"SQLite format 3\0"),
+            "backup must not contain a plain SQLite header"
+        );
 
-    // A wrong password must be rejected.
-    let wrong = backup::prepare_restore(&destination, &directory, "wrong password entirely");
-    assert!(
-        wrong.is_err(),
-        "a wrong password must not restore the backup"
-    );
+        // A wrong password must be rejected.
+        eprintln!("[backup] checking that a wrong password is rejected");
+        let wrong = backup::prepare_restore(&destination, &directory, "wrong password entirely");
+        assert!(
+            wrong.is_err(),
+            "a wrong password must not restore the backup"
+        );
 
-    // The correct password must restore into a usable database.
-    let prepared =
-        backup::prepare_restore(&destination, &directory, "correct horse battery staple")
-            .expect("restore prepares");
-    let branch_count: i64 = prepared
-        .connection()
-        .query_row("SELECT COUNT(*) FROM branches", [], |row| row.get(0))
-        .expect("restored database is queryable");
-    assert!(
-        branch_count > 0,
-        "restored database must contain the seed branch"
-    );
+        // The correct password must restore into a usable database.
+        eprintln!("[backup] restoring with the correct password");
+        let prepared =
+            backup::prepare_restore(&destination, &directory, "correct horse battery staple")
+                .expect("restore prepares");
+        eprintln!("[backup] querying the restored database");
+        let branch_count: i64 = prepared
+            .connection()
+            .query_row("SELECT COUNT(*) FROM branches", [], |row| row.get(0))
+            .expect("restored database is queryable");
+        assert!(
+            branch_count > 0,
+            "restored database must contain the seed branch"
+        );
 
-    fs::remove_dir_all(directory).ok();
+        eprintln!("[backup] done");
+        fs::remove_dir_all(directory).ok();
+    });
 }
 
 #[test]

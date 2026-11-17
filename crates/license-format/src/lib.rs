@@ -261,7 +261,7 @@ pub fn device_fingerprint() -> Result<String, LicenseError> {
     }
     let provider = u32::from_le_bytes(*b"RSMB");
     let needed = unsafe { GetSystemFirmwareTable(provider, 0, null_mut(), 0) } as usize;
-    if needed < 9 || needed > 1024 * 1024 {
+    if !(9..=1024 * 1024).contains(&needed) {
         return Err(LicenseError::FingerprintUnavailable);
     }
     let mut raw = vec![0u8; needed];
