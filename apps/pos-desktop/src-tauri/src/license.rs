@@ -169,7 +169,9 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
             let grace_end = if code == "LICENSE_EXPIRED" {
                 DateTime::parse_from_rfc3339(&envelope.payload.expires_at_utc)
                     .ok()
-                    .map(|expires| expires.with_timezone(&Utc) + Duration::days(grace_period_days()))
+                    .map(|expires| {
+                        expires.with_timezone(&Utc) + Duration::days(grace_period_days())
+                    })
             } else {
                 None
             };
@@ -191,11 +193,7 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
                     production_build: naseej_license_format::is_production_key_configured(),
                 }));
             }
-            SignedLookup::Present(Box::new(empty_status(
-                code,
-                Some(device.fingerprint),
-                true,
-            )))
+            SignedLookup::Present(Box::new(empty_status(code, Some(device.fingerprint), true)))
         }
     }
 }
