@@ -37,11 +37,14 @@ pub struct LicenseStatus {
 }
 
 /// Outcome of looking for a signed licence on disk.
+///
+/// The status is boxed so the enum stays small: `Absent` carries no data and
+/// the common case should not pay for the size of a full status.
 enum SignedLookup {
     /// No licence file exists yet.
     Absent,
     /// A licence file exists and was evaluated.
-    Present(LicenseStatus),
+    Present(Box<LicenseStatus>),
 }
 
 /// Current licensing state of the installation.
@@ -56,7 +59,7 @@ pub fn current_status(state: &crate::AppState) -> LicenseStatus {
         Err(_) => return empty_status("DEVICE_FINGERPRINT_UNAVAILABLE", None, true),
     };
     match signed_license_status(Some(fingerprint.clone())) {
-        SignedLookup::Present(status) => status,
+        SignedLookup::Present(status) => *status,
         SignedLookup::Absent => match local_trial_status(state, fingerprint) {
             Ok(status) => status,
             Err(code) => empty_status(&code, None, true),
@@ -72,31 +75,31 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
     let public_key = match embedded_public_key() {
         Ok(key) => key,
         Err(_) => {
-            return SignedLookup::Present(empty_status(
+            return SignedLookup::Present(Box::new(empty_status(
                 "PUBLIC_KEY_NOT_CONFIGURED",
                 fingerprint,
                 false,
-            ));
+            )));
         }
     };
     let device = match device_info() {
         Ok(device) => device,
         Err(_) => {
-            return SignedLookup::Present(empty_status(
+            return SignedLookup::Present(Box::new(empty_status(
                 "DEVICE_FINGERPRINT_UNAVAILABLE",
                 fingerprint,
                 true,
-            ));
+            )));
         }
     };
     let path = match shared_license_path() {
         Ok(path) => path,
         Err(_) => {
-            return SignedLookup::Present(empty_status(
+            return SignedLookup::Present(Box::new(empty_status(
                 "LICENSE_STORAGE_UNAVAILABLE",
                 Some(device.fingerprint),
                 true,
-            ));
+            )));
         }
     };
     if !path.exists() {
@@ -105,36 +108,36 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
     let protected = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(_) => {
-            return SignedLookup::Present(empty_status(
+            return SignedLookup::Present(Box::new(empty_status(
                 "LICENSE_READ_FAILED",
                 Some(device.fingerprint),
                 true,
-            ));
+            )));
         }
     };
     let clear = match db::unprotect_current_user_data(&protected) {
         Ok(bytes) => bytes,
         Err(_) => {
-            return SignedLookup::Present(empty_status(
+            return SignedLookup::Present(Box::new(empty_status(
                 "LICENSE_DECRYPT_FAILED",
                 Some(device.fingerprint),
                 true,
-            ));
+            )));
         }
     };
     let envelope: SignedLicense = match serde_json::from_slice(&clear) {
         Ok(envelope) => envelope,
         Err(_) => {
-            return SignedLookup::Present(empty_status(
+            return SignedLookup::Present(Box::new(empty_status(
                 "LICENSE_FORMAT_INVALID",
                 Some(device.fingerprint),
                 true,
-            ));
+            )));
         }
     };
     let now = Utc::now();
     match validate_license_for_device(&envelope, &public_key, &device.fingerprint, now) {
-        Ok(()) => SignedLookup::Present(LicenseStatus {
+        Ok(()) => SignedLookup::Present(Box::new(LicenseStatus {
             valid: true,
             status_code: "ACTIVE".to_string(),
             device_fingerprint: Some(device.fingerprint),
@@ -149,7 +152,7 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
             grace_period: false,
             grace_expires_at_utc: None,
             production_build: naseej_license_format::is_production_key_configured(),
-        }),
+        })),
         Err(error) => {
             let code = match error {
                 naseej_license_format::LicenseError::Expired => "LICENSE_EXPIRED",
@@ -163,32 +166,36 @@ fn signed_license_status(fingerprint: Option<String>) -> SignedLookup {
             };
             // An expired licence still grants the grace period, so a merchant
             // is not locked out of their own shop in the middle of a day.
-            if code == "LICENSE_EXPIRED" {
-                if let Ok(expires) = DateTime::parse_from_rfc3339(&envelope.payload.expires_at_utc)
-                {
-                    let grace_end =
-                        expires.with_timezone(&Utc) + Duration::days(grace_period_days());
-                    if now < grace_end {
-                        return SignedLookup::Present(LicenseStatus {
-                            valid: true,
-                            status_code: "GRACE_PERIOD".to_string(),
-                            device_fingerprint: Some(device.fingerprint),
-                            license_id: Some(envelope.payload.license_id),
-                            customer_id: Some(envelope.payload.customer_id),
-                            plan_code: envelope.payload.plan_code,
-                            expires_at_utc: Some(envelope.payload.expires_at_utc),
-                            features: envelope.payload.features.into_iter().collect(),
-                            limits: envelope.payload.limits,
-                            public_key_configured: true,
-                            local_trial: false,
-                            grace_period: true,
-                            grace_expires_at_utc: Some(grace_end.to_rfc3339()),
-                            production_build: naseej_license_format::is_production_key_configured(),
-                        });
-                    }
-                }
+            let grace_end = if code == "LICENSE_EXPIRED" {
+                DateTime::parse_from_rfc3339(&envelope.payload.expires_at_utc)
+                    .ok()
+                    .map(|expires| expires.with_timezone(&Utc) + Duration::days(grace_period_days()))
+            } else {
+                None
+            };
+            if let Some(grace_end) = grace_end.filter(|end| now < *end) {
+                return SignedLookup::Present(Box::new(LicenseStatus {
+                    valid: true,
+                    status_code: "GRACE_PERIOD".to_string(),
+                    device_fingerprint: Some(device.fingerprint),
+                    license_id: Some(envelope.payload.license_id),
+                    customer_id: Some(envelope.payload.customer_id),
+                    plan_code: envelope.payload.plan_code,
+                    expires_at_utc: Some(envelope.payload.expires_at_utc),
+                    features: envelope.payload.features.into_iter().collect(),
+                    limits: envelope.payload.limits,
+                    public_key_configured: true,
+                    local_trial: false,
+                    grace_period: true,
+                    grace_expires_at_utc: Some(grace_end.to_rfc3339()),
+                    production_build: naseej_license_format::is_production_key_configured(),
+                }));
             }
-            SignedLookup::Present(empty_status(code, Some(device.fingerprint), true))
+            SignedLookup::Present(Box::new(empty_status(
+                code,
+                Some(device.fingerprint),
+                true,
+            )))
         }
     }
 }

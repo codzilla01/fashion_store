@@ -213,9 +213,11 @@ jobs:
               if [ -f "$f" ]; then
                 echo "#### $f"
                 echo "#### errors:"
-                grep -n -E '^(error|error\[|warning: unused|note: |help: |thread )' "$f" | head -60 || true
+                grep -n -E '^(error|error\[)' "$f" | head -60 || true
+                echo "#### locations:"
+                grep -n -E '\-\-> src/' "$f" | head -60 || true
                 echo "#### tail:"
-                tail -n 60 "$f"
+                tail -n 40 "$f"
                 echo
               fi
             done
