@@ -137,17 +137,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             max_users,
             max_branches,
             registry,
-        } => issue(
-            request,
+        } => issue(IssueOptions {
+            request_path: request,
             customer_id,
             plan,
             starts_at_utc,
-            private_key_file,
-            features,
+            private_key_path: private_key_file,
+            requested_features: features,
             max_users,
             max_branches,
-            registry.unwrap_or(default_registry_dir()?),
-        ),
+            registry_dir: registry.unwrap_or(default_registry_dir()?),
+        }),
         Command::List { registry } => {
             list_subscriptions(registry.unwrap_or(default_registry_dir()?))
         }
@@ -162,7 +162,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn issue(
+/// Everything needed to issue one licence.
+///
+/// Grouped into a struct so the issuing function stays within a readable
+/// signature and so adding a field does not touch every call site.
+struct IssueOptions {
     request_path: PathBuf,
     customer_id: String,
     plan: Plan,
@@ -172,7 +176,20 @@ fn issue(
     max_users: u64,
     max_branches: u64,
     registry_dir: PathBuf,
-) -> Result<(), Box<dyn std::error::Error>> {
+}
+
+fn issue(options: IssueOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let IssueOptions {
+        request_path,
+        customer_id,
+        plan,
+        starts_at_utc,
+        private_key_path,
+        requested_features,
+        max_users,
+        max_branches,
+        registry_dir,
+    } = options;
     let customer_id = customer_id.trim();
     if customer_id.is_empty()
         || customer_id.len() > 128
@@ -524,17 +541,17 @@ mod tests {
         };
         fs::write(&request_path, serde_json::to_vec(&request).unwrap()).unwrap();
         fs::write(&key_path, [7u8; 32]).unwrap();
-        issue(
+        issue(IssueOptions {
             request_path,
-            "customer-test".into(),
-            Plan::Trial7d,
-            None,
-            key_path.clone(),
-            vec!["pos.sell".into()],
-            1,
-            1,
-            registry.clone(),
-        )
+            customer_id: "customer-test".into(),
+            plan: Plan::Trial7d,
+            starts_at_utc: None,
+            private_key_path: key_path.clone(),
+            requested_features: vec!["pos.sell".into()],
+            max_users: 1,
+            max_branches: 1,
+            registry_dir: registry.clone(),
+        })
         .unwrap();
         let annual_request_path = directory.join("renewal.req");
         let annual_request = ActivationRequest {
@@ -550,17 +567,17 @@ mod tests {
             serde_json::to_vec(&annual_request).unwrap(),
         )
         .unwrap();
-        issue(
-            annual_request_path,
-            "customer-test".into(),
-            Plan::Annual12m,
-            None,
-            key_path,
-            vec!["pos.sell".into()],
-            2,
-            1,
-            registry.clone(),
-        )
+        issue(IssueOptions {
+            request_path: annual_request_path,
+            customer_id: "customer-test".into(),
+            plan: Plan::Annual12m,
+            starts_at_utc: None,
+            private_key_path: key_path,
+            requested_features: vec!["pos.sell".into()],
+            max_users: 2,
+            max_branches: 1,
+            registry_dir: registry.clone(),
+        })
         .unwrap();
 
         let records = read_records(&registry).unwrap();
