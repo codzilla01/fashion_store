@@ -36,6 +36,48 @@ pub fn trace(message: &str) {
     }
 }
 
+/// The tag that binds a database file to the local installation.
+///
+/// SQLCipher aborts the process when it is handed a key that does not match
+/// the file, so the mismatch is detected here first and reported as a normal
+/// error the operator can act on.
+const DB_BINDING_DOMAIN: &[u8] = b"naseej-db-binding-v1";
+
+/// Compute the binding tag of a database key.
+fn db_binding_tag(key: &[u8; 32]) -> String {
+    let mut material = Vec::with_capacity(key.len() + DB_BINDING_DOMAIN.len());
+    material.extend_from_slice(key);
+    material.extend_from_slice(DB_BINDING_DOMAIN);
+    hex::encode(Sha256::digest(&material))
+}
+
+/// Check that the database file belongs to this installation.
+///
+/// The tag is written the first time the database is opened. A missing tag is
+/// treated as a first run; a different tag means the database file was
+/// replaced with one that was encrypted under a different key, which
+/// SQLCipher cannot open safely.
+fn check_database_binding(app_data_dir: &Path, key: &[u8; 32]) -> Result<(), String> {
+    let binding_path = app_data_dir.join("security").join("db-binding.tag");
+    let expected = db_binding_tag(key);
+    match fs::read_to_string(&binding_path) {
+        Ok(stored) => {
+            if stored.trim() == expected {
+                Ok(())
+            } else {
+                Err("DB_KEY_BINDING_MISMATCH".to_string())
+            }
+        }
+        Err(_) => {
+            if let Some(parent) = binding_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(&binding_path, &expected);
+            Ok(())
+        }
+    }
+}
+
 pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
     fs::create_dir_all(app_data_dir.join("media")).map_err(|e| format!("APP_DATA_DIR:{e}"))?;
     let database_path = app_data_dir.join("store.db");
@@ -47,6 +89,13 @@ pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
     trace("open_database: reading the protected key");
     let mut key = load_or_create_database_key(&protected_key_path)?;
     trace("open_database: key loaded");
+    // The binding is checked before SQLCipher sees the key, because handing
+    // SQLCipher a key that does not match the file aborts the process.
+    let key_bytes: [u8; 32] = key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "DB_KEY_INVALID".to_string())?;
+    check_database_binding(app_data_dir, &key_bytes)?;
     let connection = Connection::open(&database_path).map_err(|e| format!("DB_OPEN:{e}"))?;
     trace("open_database: database file opened");
     let key_hex = hex::encode(&key);

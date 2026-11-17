@@ -67,25 +67,40 @@ fn opens_an_encrypted_database_and_reports_sqlcipher() {
     fs::remove_dir_all(directory).ok();
 }
 
+/// Set on the child process that probes a wrong key.
+const WRONG_KEY_CHILD: &str = "NASEEJ_WRONG_KEY_CHILD";
+
 #[test]
 fn refuses_to_open_the_database_without_the_protected_key() {
+    // SQLCipher can abort the whole process when it is handed a key that does
+    // not match the file, so the probe runs in a child process. The parent
+    // asserts the outcome that matters: the schema must not be readable.
+    if std::env::var_os(WRONG_KEY_CHILD).is_some() {
+        run_wrong_key_probe();
+        return;
+    }
+
+    let executable = std::env::current_exe().expect("test executable path");
+    let output = std::process::Command::new(executable)
+        .args([
+            "--exact",
+            "refuses_to_open_the_database_without_the_protected_key",
+            "--nocapture",
+        ])
+        .env(WRONG_KEY_CHILD, "1")
+        .output()
+        .expect("the wrong key probe runs");
+    assert_ne!(
+        output.status.code(),
+        Some(0),
+        "a wrong key must not be able to read the schema"
+    );
+
+    // The correct key, recovered through DPAPI, must still work.
     let directory = temp_dir("nokey");
     {
         let _connection = db::open_database(&directory).expect("database opens");
     }
-
-    // A wrong key must not be able to read the schema.
-    let connection = Connection::open(directory.join("store.db")).expect("file opens");
-    let wrong_key = [0xABu8; 32];
-    db::set_sqlcipher_key(&connection, &wrong_key).expect("key pragma accepted");
-    let readable = connection
-        .query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .is_ok();
-    assert!(!readable, "a wrong key must not be able to read the schema");
-
-    // The correct key, recovered through DPAPI, must still work.
     let key = db::load_database_key(&directory).expect("DPAPI key round trip");
     let connection = Connection::open(directory.join("store.db")).expect("file opens");
     db::set_sqlcipher_key(&connection, &key).expect("key pragma accepted");
@@ -95,6 +110,58 @@ fn refuses_to_open_the_database_without_the_protected_key() {
     assert!(count > 0, "the correct key must open the database");
 
     fs::remove_dir_all(directory).ok();
+}
+
+/// The body of the wrong-key probe.
+///
+/// It runs in a child process and reports the outcome through the exit code:
+/// `0` means the schema was readable, which is a failure.
+fn run_wrong_key_probe() {
+    let directory = temp_dir("nokey-child");
+    {
+        let _connection = db::open_database(&directory).expect("database opens");
+    }
+    let connection = Connection::open(directory.join("store.db")).expect("file opens");
+    let wrong_key = [0xABu8; 32];
+    db::set_sqlcipher_key(&connection, &wrong_key).expect("key pragma accepted");
+    let readable = connection
+        .query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .is_ok();
+    fs::remove_dir_all(directory).ok();
+    std::process::exit(if readable { 0 } else { 3 });
+}
+
+#[test]
+fn rejects_a_database_that_belongs_to_another_installation() {
+    let directory = temp_dir("binding");
+    {
+        let _connection = db::open_database(&directory).expect("database opens");
+    }
+    // The binding tag belongs to this installation.
+    let binding = directory.join("security").join("db-binding.tag");
+    assert!(
+        binding.exists(),
+        "the database binding tag must be written on first open"
+    );
+
+    // A database file taken from another installation is rejected before
+    // SQLCipher is handed a key that does not match it.
+    let foreign = temp_dir("binding-foreign");
+    let foreign_connection = db::open_database(&foreign).expect("database opens");
+    drop(foreign_connection);
+    fs::copy(foreign.join("store.db"), directory.join("store.db"))
+        .expect("the foreign database is copied over");
+
+    let result = db::open_database(&directory);
+    assert!(
+        result.is_err(),
+        "a database from another installation must be rejected"
+    );
+
+    fs::remove_dir_all(directory).ok();
+    fs::remove_dir_all(foreign).ok();
 }
 
 #[test]
