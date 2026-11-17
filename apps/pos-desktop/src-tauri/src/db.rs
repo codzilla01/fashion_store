@@ -219,11 +219,13 @@ pub fn set_sqlcipher_key_with(
     let memory_security = if memory_security { "ON" } else { "OFF" };
     // The cipher is configured before the key so SQLCipher uses the raw key
     // as given instead of re-deriving one.
-    connection.execute_batch(&format!(
-        "{CIPHER_SETTINGS}
+    connection
+        .execute_batch(&format!(
+            "{CIPHER_SETTINGS}
          PRAGMA cipher_memory_security = {memory_security};
          PRAGMA key = \"x'{key_hex}'\";"
-    )).map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
+        ))
+        .map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     let cipher_version: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
         .map_err(|_| "SQLCIPHER_REQUIRED".to_string())?;
