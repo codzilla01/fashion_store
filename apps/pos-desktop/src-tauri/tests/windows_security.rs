@@ -31,9 +31,10 @@ fn temp_dir(label: &str) -> PathBuf {
 
 /// Run a test body on a thread with a generous stack.
 ///
-/// SQLCipher's key handling and the SQLite backup API both recurse, and the
-/// default test-thread stack is small enough for that recursion to overflow
-/// it. A larger stack removes the failure mode without changing behaviour.
+/// The backup path runs SQLite's backup API over a second encrypted database,
+/// with the SQLCipher codec decrypting and re-encrypting every page. The
+/// default test-thread stack is small on Windows, so the body runs on a
+/// thread with room to spare.
 fn run_with_large_stack(body: impl FnOnce() + Send + 'static) {
     std::thread::Builder::new()
         .stack_size(32 * 1024 * 1024)
@@ -57,6 +58,20 @@ fn opens_an_encrypted_database_and_reports_sqlcipher() {
         "SQLCipher must be the active engine, not plain SQLite"
     );
 
+    // SQLCipher's "enhanced memory security" mode must stay off. It is a
+    // process-wide one-way switch, so a single connection that turns it on
+    // would push every later allocation in the whole process through the
+    // mode's allocator, which ends the process with a stack overflow in the
+    // bundled SQLCipher.
+    let memory_security: String = connection
+        .query_row("PRAGMA cipher_memory_security", [], |row| row.get(0))
+        .expect("cipher_memory_security is readable");
+    assert_eq!(
+        memory_security.trim(),
+        "0",
+        "SQLCipher's enhanced memory security mode must not be enabled"
+    );
+
     // The file on disk must not be a readable plain SQLite database.
     let raw = fs::read(directory.join("store.db")).expect("database file exists");
     assert!(
@@ -69,6 +84,9 @@ fn opens_an_encrypted_database_and_reports_sqlcipher() {
 
 /// Set on the child process that probes a wrong key.
 const WRONG_KEY_CHILD: &str = "NASEEJ_WRONG_KEY_CHILD";
+
+/// The exit code the probe uses when the schema could not be read.
+const WRONG_KEY_REJECTED: i32 = 3;
 
 #[test]
 fn refuses_to_open_the_database_without_the_protected_key() {
@@ -90,10 +108,17 @@ fn refuses_to_open_the_database_without_the_protected_key() {
         .env(WRONG_KEY_CHILD, "1")
         .output()
         .expect("the wrong key probe runs");
-    assert_ne!(
+    // The probe has to reject the key *and* say so in its exit code. A crash
+    // is not a pass: an abort or a stack overflow would otherwise satisfy
+    // "the child did not succeed" while the process did not survive the
+    // wrong key either.
+    assert_eq!(
         output.status.code(),
-        Some(0),
-        "a wrong key must not be able to read the schema"
+        Some(WRONG_KEY_REJECTED),
+        "a wrong key must be rejected without reading the schema\n\
+         child exit code: {:?}\nchild stderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
     );
 
     // The correct key, recovered through DPAPI, must still work.
@@ -115,7 +140,8 @@ fn refuses_to_open_the_database_without_the_protected_key() {
 /// The body of the wrong-key probe.
 ///
 /// It runs in a child process and reports the outcome through the exit code:
-/// `0` means the schema was readable, which is a failure.
+/// `0` means the schema was readable, which is a failure, and
+/// `WRONG_KEY_REJECTED` means the key was refused.
 fn run_wrong_key_probe() {
     let directory = temp_dir("nokey-child");
     {
@@ -130,7 +156,7 @@ fn run_wrong_key_probe() {
         })
         .is_ok();
     fs::remove_dir_all(directory).ok();
-    std::process::exit(if readable { 0 } else { 3 });
+    std::process::exit(if readable { 0 } else { WRONG_KEY_REJECTED });
 }
 
 #[test]

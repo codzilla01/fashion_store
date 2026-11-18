@@ -14,17 +14,27 @@ const MIGRATION_0003: &str = include_str!("../migrations/0003_local_trial_state.
 pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 const BRANCH_ID: &str = "00000000-0000-4000-8000-000000000001";
 
-/// The SQLCipher 4 settings used for every database this application opens.
-///
-/// `cipher_compatibility` is deliberately not used: it is a migration pragma
-/// that makes SQLCipher re-derive the key, which does not fit the raw random
-/// key this application stores under Windows DPAPI. The values below are the
-/// SQLCipher 4 defaults, stated explicitly so the on-disk format does not
-/// depend on the library version.
-const CIPHER_SETTINGS: &str = "PRAGMA cipher_page_size = 4096;
-         PRAGMA kdf_iter = 256000;
-         PRAGMA cipher_hmac_algorithm = HMAC_SHA512;
-         PRAGMA cipher_kdf_algorithm = PBKDF2_HMAC_SHA512;";
+// The SQLCipher configuration
+//
+// Exactly one pragma is applied to every connection: the key itself.
+//
+// * `cipher_compatibility` is a migration pragma. Applying it makes SQLCipher
+//   re-derive the key, which does not fit the raw random key this
+//   application stores under Windows DPAPI.
+// * No cipher parameter (`cipher_page_size`, `kdf_iter`,
+//   `cipher_hmac_algorithm`, `cipher_kdf_algorithm`) is set. The bundled
+//   SQLCipher is version 4 and its defaults are exactly page size 4096,
+//   PBKDF2-HMAC-SHA512 with 256,000 iterations and HMAC-SHA512, so stating
+//   them again cannot change the result.
+// * `cipher_memory_security` is deliberately not used. It is a process-wide
+//   one-way switch: once any connection turns it on, every later allocation
+//   in the whole process runs through SQLCipher's "enhanced memory
+//   security" allocator, which locks pages with `VirtualLock` on Windows and
+//   wipes every block before it is freed. In the bundled SQLCipher that mode
+//   ends the process with a stack overflow, so it stays off.
+//
+// The on-disk format is unchanged: page size 4096, PBKDF2-HMAC-SHA512 with
+// 256,000 iterations and HMAC-SHA512, the SQLCipher 4 defaults.
 
 /// Emit a diagnostic line when `NASEEJ_TRACE` is set.
 ///
@@ -99,21 +109,14 @@ pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
     let connection = Connection::open(&database_path).map_err(|e| format!("DB_OPEN:{e}"))?;
     trace("open_database: database file opened");
     let key_hex = hex::encode(&key);
-    trace("open_database: applying the cipher settings");
+    trace("open_database: applying the key");
     // The generated key is hex-only, so this PRAGMA cannot carry user input.
-    //
-    // The cipher settings are applied before the key: SQLCipher finalises the
-    // cipher when the key is set, so configuring it afterwards makes SQLCipher
-    // re-derive the key instead of using the raw key.
     connection
-        .execute_batch(&format!(
-            "{CIPHER_SETTINGS}
-         PRAGMA key = \"x'{key_hex}'\";"
-        ))
+        .execute_batch(&format!("PRAGMA key = \"x'{key_hex}'\";"))
         .map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     key.zeroize();
 
-    trace("open_database: cipher settings applied");
+    trace("open_database: key applied");
     trace("open_database: verifying SQLCipher");
     // Reading the schema is intentional: it verifies that the key opened an encrypted database.
     let cipher_version: String = connection
@@ -248,32 +251,16 @@ pub fn load_database_key(app_data_dir: &Path) -> Result<Zeroizing<[u8; 32]>, Str
 
 /// Apply the SQLCipher key to a connection.
 ///
-/// `memory_security` controls SQLCipher's `cipher_memory_security`. It keeps
-/// the key material locked in RAM so it cannot be paged to disk, which
-/// matters for the live database. It is switched off for the short-lived
-/// staging databases used while building or restoring a backup: those files
-/// hold no data of their own, and SQLCipher's memory locking can fail under
-/// a constrained commit limit, which then breaks the copy step.
+/// Only `PRAGMA key` is issued. `cipher_memory_security` is not used: it is
+/// a process-wide one-way switch, and the "enhanced memory security" mode it
+/// enables terminates the process with a stack overflow in the bundled
+/// SQLCipher. The key itself does not need that mode: it is protected by
+/// Windows DPAPI at rest, and the Rust-side copies are zeroized.
 pub fn set_sqlcipher_key(connection: &Connection, key: &[u8; 32]) -> Result<(), String> {
-    set_sqlcipher_key_with(connection, key, true)
-}
-
-/// Apply the SQLCipher key with an explicit memory-security setting.
-pub fn set_sqlcipher_key_with(
-    connection: &Connection,
-    key: &[u8; 32],
-    memory_security: bool,
-) -> Result<(), String> {
     let key_hex = hex::encode(key);
-    let memory_security = if memory_security { "ON" } else { "OFF" };
-    // The cipher is configured before the key so SQLCipher uses the raw key
-    // as given instead of re-deriving one.
+    // The generated key is hex-only, so this PRAGMA cannot carry user input.
     connection
-        .execute_batch(&format!(
-            "{CIPHER_SETTINGS}
-         PRAGMA cipher_memory_security = {memory_security};
-         PRAGMA key = \"x'{key_hex}'\";"
-        ))
+        .execute_batch(&format!("PRAGMA key = \"x'{key_hex}'\";"))
         .map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     let cipher_version: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
