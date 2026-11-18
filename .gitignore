@@ -1,0 +1,41 @@
+# Node / frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# Rust
+target/
+**/target/
+
+# TypeScript incremental build state
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# Local secrets and release artifacts — never commit these.
+.env
+.env.*
+!.env.example
+*.bkz
+*.req
+*.lic
+*.pem
+*.key
+release-artifacts/

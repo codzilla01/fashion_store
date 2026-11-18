@@ -15,6 +15,9 @@ use uuid::Uuid;
 const SESSION_IDLE: Duration = Duration::from_secs(5 * 60);
 const MAIN_BRANCH_CODE: &str = "MAIN";
 
+/// One season row: id, Arabic name, English name, start date, end date.
+type SeasonRow = (String, String, String, Option<String>, Option<String>);
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppStatus {
@@ -495,14 +498,193 @@ pub struct ProfitSummary {
     pub margin_bps: i64,
 }
 
+/// Load the stored data of an invoice so it can be printed.
+///
+/// Printing reads straight from the encrypted database, so a receipt can be
+/// reprinted long after the sale and without an open session.
+fn load_receipt_data(
+    state: &AppState,
+    db: &Connection,
+    branch_id: &str,
+    invoice_id: &str,
+) -> Result<crate::printing::ReceiptData, String> {
+    //  0 invoice_no          1 currency_code      2 subtotal_minor
+    //  3 item_discount      4 invoice_discount    5 tax_minor
+    //  6 total_minor        7 tax_rate_bps        8 prices_include_tax
+    //  9 created_at        10 branch_name_ar     11 branch_name_en
+    // 12 cashier_name      13 customer_name_ciphertext
+    let receipt = db
+        .query_row(
+            "SELECT i.invoice_no, i.currency_code, i.subtotal_minor, i.item_discount_minor,
+                    i.invoice_discount_minor, i.tax_minor, i.total_minor, i.tax_rate_bps,
+                    i.prices_include_tax, i.created_at, b.name_ar, b.name_en,
+                    COALESCE(u.display_name,''), c.name_ciphertext
+             FROM invoices i
+             JOIN branches b ON b.id=i.branch_id
+             JOIN users u ON u.id=i.cashier_user_id
+             LEFT JOIN customers c ON c.branch_id=i.branch_id AND c.id=i.customer_id
+             WHERE i.branch_id=?1 AND i.id=?2",
+            params![branch_id, invoice_id],
+            |row| {
+                Ok(crate::printing::ReceiptData {
+                    invoice_no: row.get(0)?,
+                    branch_name_ar: row.get(10)?,
+                    branch_name_en: row.get(11)?,
+                    currency_code: row.get(1)?,
+                    cashier_name: row.get(12)?,
+                    created_at_utc: row.get(9)?,
+                    customer_name: None,
+                    subtotal_minor: row.get(2)?,
+                    item_discount_minor: row.get(3)?,
+                    invoice_discount_minor: row.get(4)?,
+                    tax_minor: row.get(5)?,
+                    total_minor: row.get(6)?,
+                    tax_rate_bps: row.get(7)?,
+                    prices_include_tax: row.get::<_, i64>(8)? != 0,
+                    lines: Vec::new(),
+                    payments: Vec::new(),
+                })
+            },
+        )
+        .map_err(|_| "INVOICE_NOT_FOUND".to_string())?;
+
+    let customer_name: Option<String> = db
+        .query_row(
+            "SELECT c.name_ciphertext FROM invoices i
+             JOIN customers c ON c.branch_id=i.branch_id AND c.id=i.customer_id
+             WHERE i.branch_id=?1 AND i.id=?2",
+            params![branch_id, invoice_id],
+            |row| row.get::<_, Option<Vec<u8>>>(0),
+        )
+        .optional()
+        .map_err(|_| "INVOICE_NOT_FOUND".to_string())?
+        .flatten()
+        .and_then(|blob| {
+            db::decrypt_personal_field(&state.personal_data_key, &blob)
+                .ok()
+                .and_then(|clear| String::from_utf8(clear).ok())
+        });
+
+    let lines = {
+        let mut statement = db
+            .prepare(
+                "SELECT product_name_ar_snapshot, product_name_en_snapshot, sku_snapshot,
+                        size_snapshot, color_snapshot, quantity, unit_price_minor,
+                        line_discount_minor, tax_minor, line_total_minor
+                 FROM invoice_lines WHERE branch_id=?1 AND invoice_id=?2
+                 ORDER BY product_name_ar_snapshot, id",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![branch_id, invoice_id], |row| {
+                let ar: String = row.get(0)?;
+                let en: String = row.get(1)?;
+                Ok(crate::printing::ReceiptLine {
+                    product: if ar.is_empty() { en } else { ar },
+                    quantity: row.get::<_, i64>(5)? as u32,
+                    unit_price_minor: row.get(6)?,
+                    discount_minor: row.get(7)?,
+                    tax_minor: row.get(8)?,
+                    total_minor: row.get(9)?,
+                    sku: row.get(2)?,
+                    size: row.get(3)?,
+                    color: row.get(4)?,
+                })
+            })
+            .map_err(db_error)?;
+        let mut collected = Vec::new();
+        for row in rows {
+            collected.push(row.map_err(db_error)?);
+        }
+        collected
+    };
+
+    let payments = {
+        let mut statement = db
+            .prepare(
+                "SELECT method, amount_minor FROM payments
+                 WHERE branch_id=?1 AND invoice_id=?2 ORDER BY created_at, id",
+            )
+            .map_err(db_error)?;
+        let rows = statement
+            .query_map(params![branch_id, invoice_id], |row| {
+                Ok(crate::printing::ReceiptPayment {
+                    method: row.get(0)?,
+                    amount_minor: row.get(1)?,
+                })
+            })
+            .map_err(db_error)?;
+        let mut collected = Vec::new();
+        for row in rows {
+            collected.push(row.map_err(db_error)?);
+        }
+        collected
+    };
+
+    let mut receipt = receipt;
+    receipt.lines = lines;
+    receipt.payments = payments;
+    receipt.customer_name = customer_name;
+    Ok(receipt)
+}
+
+/// Print the receipt of a completed invoice.
+///
+/// `mode` selects between sending straight to the default printer and opening
+/// the system print dialog.
+#[tauri::command]
+pub fn print_invoice(
+    state: tauri::State<'_, AppState>,
+    session_token: String,
+    invoice_id: String,
+    mode: Option<String>,
+    paper: Option<String>,
+) -> Result<crate::printing::PrintOutcome, String> {
+    let session = require_permission(&state, &session_token, "sales.read")?;
+    let db = state.db.lock().map_err(|_| "DB_LOCK_FAILED".to_string())?;
+    let receipt = load_receipt_data(&state, &db, &session.branch_id, &invoice_id)?;
+    drop(db);
+
+    let width = match paper.as_deref() {
+        Some("80") => crate::printing::WIDTH_80,
+        _ => crate::printing::WIDTH_58,
+    };
+    let print_mode = match mode.as_deref() {
+        Some("dialog") => crate::printing::PrintMode::Dialog,
+        _ => crate::printing::PrintMode::Direct,
+    };
+    crate::printing::print_receipt(&receipt, width, print_mode)
+}
+
+/// Render the receipt of an invoice as text, without sending it to a printer.
+///
+/// This is used by the on-screen receipt preview and by the tests.
+#[tauri::command]
+pub fn preview_invoice_receipt(
+    state: tauri::State<'_, AppState>,
+    session_token: String,
+    invoice_id: String,
+    paper: Option<String>,
+) -> Result<String, String> {
+    let session = require_permission(&state, &session_token, "sales.read")?;
+    let db = state.db.lock().map_err(|_| "DB_LOCK_FAILED".to_string())?;
+    let receipt = load_receipt_data(&state, &db, &session.branch_id, &invoice_id)?;
+    drop(db);
+    let width = match paper.as_deref() {
+        Some("80") => crate::printing::WIDTH_80,
+        _ => crate::printing::WIDTH_58,
+    };
+    Ok(crate::printing::render_text(&receipt, width))
+}
+
 #[tauri::command]
 pub fn get_license_status(state: tauri::State<'_, AppState>) -> crate::license::LicenseStatus {
-    let mut status = crate::license::current_status();
-    if status.valid {
-        if let Err(error) = crate::license::record_trusted_time(&state, &status) {
-            status.valid = false;
-            status.status_code = error;
-        }
+    let mut status = crate::license::current_status(&state);
+    if status.valid
+        && let Err(error) = crate::license::record_trusted_time(&state, &status)
+    {
+        status.valid = false;
+        status.status_code = error;
     }
     status
 }
@@ -517,7 +699,7 @@ pub fn import_activation_license(
     state: tauri::State<'_, AppState>,
     license_json: String,
 ) -> Result<crate::license::LicenseStatus, String> {
-    let status = crate::license::import_signed_license(&license_json)?;
+    let status = crate::license::import_signed_license(&state, &license_json)?;
     crate::license::record_trusted_time(&state, &status)?;
     Ok(status)
 }
@@ -640,10 +822,10 @@ pub fn login(
     if active != 1 {
         return Err("LOGIN_FAILED".to_string());
     }
-    if let Some(until) = locked_until {
-        if until > Utc::now().to_rfc3339() {
-            return Err("ACCOUNT_TEMPORARILY_LOCKED".to_string());
-        }
+    if let Some(until) = locked_until
+        && until > Utc::now().to_rfc3339()
+    {
+        return Err("ACCOUNT_TEMPORARILY_LOCKED".to_string());
     }
     let parsed =
         PasswordHash::new(&password_phc).map_err(|_| "PASSWORD_HASH_INVALID".to_string())?;
@@ -1292,10 +1474,9 @@ pub fn create_product(
             .barcode
             .as_deref()
             .filter(|value| !value.trim().is_empty())
+            && (barcode.trim().len() > 64 || !barcodes.insert(barcode.trim().to_string()))
         {
-            if barcode.trim().len() > 64 || !barcodes.insert(barcode.trim().to_string()) {
-                return Err("BARCODE_DUPLICATE_OR_INVALID".to_string());
-            }
+            return Err("BARCODE_DUPLICATE_OR_INVALID".to_string());
         }
     }
 
@@ -2373,7 +2554,7 @@ pub fn create_user(
     {
         return Err("USER_INPUT_INVALID".to_string());
     }
-    let license = crate::license::ensure_valid()?;
+    let license = crate::license::ensure_valid(&state)?;
     let password_phc = hash_password(&request.password)?;
     let user_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
@@ -2537,7 +2718,7 @@ pub fn create_branch(
     request: CreateBranchRequest,
 ) -> Result<BranchOption, String> {
     let session = require_permission(&state, &session_token, "branches.manage")?;
-    let license = crate::license::ensure_valid()?;
+    let license = crate::license::ensure_valid(&state)?;
     let max_branches = *license
         .limits
         .get("max_branches")
@@ -2753,7 +2934,7 @@ fn copy_branch_catalog(
         )
         .map_err(db_error)?;
     }
-    let seasons: Vec<(String, String, String, Option<String>, Option<String>)> = {
+    let seasons: Vec<SeasonRow> = {
         let mut statement = tx
             .prepare("SELECT id,name_ar,name_en,starts_on,ends_on FROM seasons WHERE branch_id=?1")
             .map_err(db_error)?;
@@ -3652,7 +3833,7 @@ pub fn sqlcipher_health(state: tauri::State<'_, AppState>) -> Result<String, Str
 }
 
 fn require_permission(state: &AppState, token: &str, permission: &str) -> Result<Session, String> {
-    let license = crate::license::ensure_valid()?;
+    let license = crate::license::ensure_valid(state)?;
     crate::license::record_trusted_time(state, &license)?;
     let required_feature = match permission {
         "sales.read" | "sales.create" | "sales.discount" | "customers.manage" => Some("pos.sell"),
@@ -3668,10 +3849,10 @@ fn require_permission(state: &AppState, token: &str, permission: &str) -> Result
         "backup.manage" => Some("backup.restore"),
         _ => None,
     };
-    if let Some(feature) = required_feature {
-        if !license.features.iter().any(|licensed| licensed == feature) {
-            return Err(format!("LICENSE_FEATURE_NOT_INCLUDED:{feature}"));
-        }
+    if let Some(feature) = required_feature
+        && !license.features.iter().any(|licensed| licensed == feature)
+    {
+        return Err(format!("LICENSE_FEATURE_NOT_INCLUDED:{feature}"));
     }
     let mut sessions = state
         .sessions
@@ -3787,6 +3968,11 @@ fn rounded_signed_ratio(numerator: i128, denominator: i128) -> Result<i64, Strin
     }
 }
 
+/// Append one entry to the tamper-evident audit log.
+///
+/// The parameters mirror the `audit_log` columns one for one, which is why
+/// they are kept positional rather than grouped into a struct.
+#[allow(clippy::too_many_arguments)]
 fn insert_audit(
     tx: &Transaction<'_>,
     id: &str,
@@ -3826,9 +4012,8 @@ fn insert_audit(
 fn normalize_phone(input: &str) -> Result<String, String> {
     let mut normalized = String::new();
     for character in input.trim().chars() {
-        if character.is_ascii_digit() {
-            normalized.push(character);
-        } else if character == '+' && normalized.is_empty() {
+        // Digits are kept as they are; a leading plus sign is kept too.
+        if character.is_ascii_digit() || (character == '+' && normalized.is_empty()) {
             normalized.push(character);
         } else if matches!(character, ' ' | '-' | '(' | ')' | '.') {
             continue;

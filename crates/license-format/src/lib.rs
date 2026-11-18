@@ -14,6 +14,55 @@ pub const LICENSE_SCHEMA_VERSION: u32 = 2;
 pub const PLAN_TRIAL_7D: &str = "trial_7d";
 pub const PLAN_ANNUAL_12M: &str = "annual_12m";
 
+/// Locally generated evaluation entitlement.
+///
+/// Unlike [`PLAN_TRIAL_7D`] this plan is **not** signed by the issuer. It is
+/// created by the application on the device itself so a customer can evaluate
+/// the product without waiting for an offline activation round-trip. It is
+/// deliberately weaker than a signed license and is documented as such.
+pub const PLAN_TRIAL_LOCAL: &str = "trial_local";
+
+/// Length of the automatically started local evaluation, in days.
+pub const LOCAL_TRIAL_DAYS: i64 = 7;
+
+/// Number of days a merchant may keep working after a licence expires.
+///
+/// Hard-locking a shop in the middle of a trading day is worse for the
+/// customer than a short unpaid extension, so expiry moves the application
+/// into a clearly marked grace period before it locks.
+pub const DEFAULT_GRACE_DAYS: i64 = 14;
+
+/// Features granted by the automatically started local evaluation.
+///
+/// `reports.profit` and `commissions.read` are intentionally excluded: margin
+/// reporting stays a paid capability.
+pub fn local_trial_features() -> BTreeSet<String> {
+    BTreeSet::from([
+        "pos.sell".to_string(),
+        "inventory.manage".to_string(),
+        "returns.exchange".to_string(),
+        "reports.basic".to_string(),
+        "backup.restore".to_string(),
+    ])
+}
+
+/// Limits granted by the automatically started local evaluation.
+pub fn local_trial_limits() -> BTreeMap<String, u64> {
+    BTreeMap::from([
+        ("max_users".to_string(), 3),
+        ("max_branches".to_string(), 1),
+    ])
+}
+
+/// Grace period in days, overridable at build time with
+/// `NASEEJ_LICENSE_GRACE_DAYS`.
+pub fn grace_period_days() -> i64 {
+    option_env!("NASEEJ_LICENSE_GRACE_DAYS")
+        .and_then(|value| value.trim().parse::<i64>().ok())
+        .filter(|value| (0..=365).contains(value))
+        .unwrap_or(DEFAULT_GRACE_DAYS)
+}
+
 #[derive(Debug, Error)]
 pub enum LicenseError {
     #[error("license serialization is invalid")]
@@ -159,6 +208,28 @@ pub fn validate_license_for_device(
     Ok(())
 }
 
+/// Public key baked into CI and development builds.
+///
+/// A build that carries this key cannot validate any licence issued by the
+/// production issuer, so it must never be handed to a paying customer.
+pub const PLACEHOLDER_PUBLIC_KEY_HEX: &str =
+    "0000000000000000000000000000000000000000000000000000000000000000";
+
+/// True when this build carries a real production licence key.
+///
+/// Returns `false` for development builds, for builds without the
+/// `NASEEJ_LICENSE_PUBLIC_KEY_HEX` environment variable, and for builds that
+/// still carry the CI placeholder key.
+pub fn is_production_key_configured() -> bool {
+    match option_env!("NASEEJ_LICENSE_PUBLIC_KEY_HEX") {
+        Some(value) => {
+            let trimmed = value.trim();
+            !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case(PLACEHOLDER_PUBLIC_KEY_HEX)
+        }
+        None => false,
+    }
+}
+
 pub fn embedded_public_key() -> Result<VerifyingKey, LicenseError> {
     let encoded =
         option_env!("NASEEJ_LICENSE_PUBLIC_KEY_HEX").ok_or(LicenseError::PublicKeyNotConfigured)?;
@@ -190,7 +261,7 @@ pub fn device_fingerprint() -> Result<String, LicenseError> {
     }
     let provider = u32::from_le_bytes(*b"RSMB");
     let needed = unsafe { GetSystemFirmwareTable(provider, 0, null_mut(), 0) } as usize;
-    if needed < 9 || needed > 1024 * 1024 {
+    if !(9..=1024 * 1024).contains(&needed) {
         return Err(LicenseError::FingerprintUnavailable);
     }
     let mut raw = vec![0u8; needed];
@@ -331,5 +402,44 @@ mod tests {
             verify_license(&envelope, &signing.verifying_key()),
             Err(LicenseError::InvalidPlan)
         ));
+    }
+
+    #[test]
+    fn local_evaluation_limits_and_features_are_bounded() {
+        let features = local_trial_features();
+        assert!(features.contains("pos.sell"));
+        assert!(!features.is_empty());
+
+        let limits = local_trial_limits();
+        assert_eq!(limits.get("max_users"), Some(&3));
+        assert_eq!(limits.get("max_branches"), Some(&1));
+    }
+
+    #[test]
+    fn grace_period_is_a_positive_bounded_number_of_days() {
+        // black_box keeps the assertion from being folded away at compile
+        // time, so it really checks the value this build will use.
+        let days = std::hint::black_box(grace_period_days());
+        assert!(days > 0, "grace period must be positive");
+        assert!(days <= 365, "grace period must stay bounded");
+    }
+
+    #[test]
+    fn placeholder_key_is_never_treated_as_a_production_key() {
+        // The CI/dev placeholder must never be reported as production ready.
+        let configured = option_env!("NASEEJ_LICENSE_PUBLIC_KEY_HEX").map(|v| v.trim());
+        if configured.is_none()
+            || configured == Some(PLACEHOLDER_PUBLIC_KEY_HEX)
+            || configured == Some("")
+        {
+            assert!(!is_production_key_configured());
+        }
+    }
+
+    #[test]
+    fn local_trial_window_is_shorter_than_a_year() {
+        let days = std::hint::black_box(LOCAL_TRIAL_DAYS);
+        assert!(days > 0, "the local evaluation must last at least one day");
+        assert!(days <= 31, "the local evaluation must stay within a month");
     }
 }

@@ -10,8 +10,83 @@ use zeroize::{Zeroize, Zeroizing};
 
 const INITIAL_SCHEMA: &str = include_str!("../migrations/0001_initial.sql");
 const MIGRATION_0002: &str = include_str!("../migrations/0002_branch_management.sql");
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+const MIGRATION_0003: &str = include_str!("../migrations/0003_local_trial_state.sql");
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 const BRANCH_ID: &str = "00000000-0000-4000-8000-000000000001";
+
+// The SQLCipher configuration
+//
+// Exactly one pragma is applied to every connection: the key itself.
+//
+// * `cipher_compatibility` is a migration pragma. Applying it makes SQLCipher
+//   re-derive the key, which does not fit the raw random key this
+//   application stores under Windows DPAPI.
+// * No cipher parameter (`cipher_page_size`, `kdf_iter`,
+//   `cipher_hmac_algorithm`, `cipher_kdf_algorithm`) is set. The bundled
+//   SQLCipher is version 4 and its defaults are exactly page size 4096,
+//   PBKDF2-HMAC-SHA512 with 256,000 iterations and HMAC-SHA512, so stating
+//   them again cannot change the result.
+// * `cipher_memory_security` is deliberately not used. It is a process-wide
+//   one-way switch: once any connection turns it on, every later allocation
+//   in the whole process runs through SQLCipher's "enhanced memory
+//   security" allocator, which locks pages with `VirtualLock` on Windows and
+//   wipes every block before it is freed. In the bundled SQLCipher that mode
+//   ends the process with a stack overflow, so it stays off.
+//
+// The on-disk format is unchanged: page size 4096, PBKDF2-HMAC-SHA512 with
+// 256,000 iterations and HMAC-SHA512, the SQLCipher 4 defaults.
+
+/// Emit a diagnostic line when `NASEEJ_TRACE` is set.
+///
+/// The Windows integration test turns this on so a failure names the exact
+/// storage step instead of just the operation.
+pub fn trace(message: &str) {
+    if std::env::var_os("NASEEJ_TRACE").is_some() {
+        eprintln!("[naseej] {message}");
+    }
+}
+
+/// The tag that binds a database file to the local installation.
+///
+/// SQLCipher aborts the process when it is handed a key that does not match
+/// the file, so the mismatch is detected here first and reported as a normal
+/// error the operator can act on.
+const DB_BINDING_DOMAIN: &[u8] = b"naseej-db-binding-v1";
+
+/// Compute the binding tag of a database key.
+fn db_binding_tag(key: &[u8; 32]) -> String {
+    let mut material = Vec::with_capacity(key.len() + DB_BINDING_DOMAIN.len());
+    material.extend_from_slice(key);
+    material.extend_from_slice(DB_BINDING_DOMAIN);
+    hex::encode(Sha256::digest(&material))
+}
+
+/// Check that the database file belongs to this installation.
+///
+/// The tag is written the first time the database is opened. A missing tag is
+/// treated as a first run; a different tag means the database file was
+/// replaced with one that was encrypted under a different key, which
+/// SQLCipher cannot open safely.
+fn check_database_binding(app_data_dir: &Path, key: &[u8; 32]) -> Result<(), String> {
+    let binding_path = app_data_dir.join("security").join("db-binding.tag");
+    let expected = db_binding_tag(key);
+    match fs::read_to_string(&binding_path) {
+        Ok(stored) => {
+            if stored.trim() == expected {
+                Ok(())
+            } else {
+                Err("DB_KEY_BINDING_MISMATCH".to_string())
+            }
+        }
+        Err(_) => {
+            if let Some(parent) = binding_path.parent() {
+                let _ = fs::create_dir_all(parent);
+            }
+            let _ = fs::write(&binding_path, &expected);
+            Ok(())
+        }
+    }
+}
 
 pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
     fs::create_dir_all(app_data_dir.join("media")).map_err(|e| format!("APP_DATA_DIR:{e}"))?;
@@ -21,19 +96,28 @@ pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
         fs::create_dir_all(parent).map_err(|e| format!("KEY_DIR:{e}"))?;
     }
 
+    trace("open_database: reading the protected key");
     let mut key = load_or_create_database_key(&protected_key_path)?;
+    trace("open_database: key loaded");
+    // The binding is checked before SQLCipher sees the key, because handing
+    // SQLCipher a key that does not match the file aborts the process.
+    let key_bytes: [u8; 32] = key
+        .as_slice()
+        .try_into()
+        .map_err(|_| "DB_KEY_INVALID".to_string())?;
+    check_database_binding(app_data_dir, &key_bytes)?;
     let connection = Connection::open(&database_path).map_err(|e| format!("DB_OPEN:{e}"))?;
+    trace("open_database: database file opened");
     let key_hex = hex::encode(&key);
+    trace("open_database: applying the key");
     // The generated key is hex-only, so this PRAGMA cannot carry user input.
     connection
-        .execute_batch(&format!(
-            "PRAGMA key = \"x'{key_hex}'\";
-         PRAGMA cipher_compatibility = 4;
-         PRAGMA cipher_memory_security = ON;"
-        ))
+        .execute_batch(&format!("PRAGMA key = \"x'{key_hex}'\";"))
         .map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     key.zeroize();
 
+    trace("open_database: key applied");
+    trace("open_database: verifying SQLCipher");
     // Reading the schema is intentional: it verifies that the key opened an encrypted database.
     let cipher_version: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
@@ -53,10 +137,14 @@ pub fn open_database(app_data_dir: &Path) -> Result<Connection, String> {
         )
         .map_err(|e| format!("DB_PRAGMA:{e}"))?;
 
-    apply_migrations(connection)
+    trace("open_database: applying migrations");
+    let connection = apply_migrations(connection)?;
+    trace("open_database: ready");
+    Ok(connection)
 }
 
 fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
+    trace("migrations: checking the schema version");
     let migration_table_exists: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations')",
         [], |row| row.get(0),
@@ -102,6 +190,7 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
     }
 
     if version < 2 {
+        trace("migrations: applying migration 0002");
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Exclusive)
             .map_err(|e| format!("MIGRATION_0002_BEGIN:{e}"))?;
@@ -119,6 +208,26 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
             .commit()
             .map_err(|e| format!("MIGRATION_0002_COMMIT:{e}"))?;
         version = 2;
+    }
+    if version < 3 {
+        trace("migrations: applying migration 0003");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Exclusive)
+            .map_err(|e| format!("MIGRATION_0003_BEGIN:{e}"))?;
+        transaction
+            .execute_batch(MIGRATION_0003)
+            .map_err(|e| format!("MIGRATION_0003:{e}"))?;
+        let digest = hex::encode(Sha256::digest(MIGRATION_0003.as_bytes()));
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations(version, checksum, applied_at) VALUES(3, ?1, ?2)",
+                rusqlite::params![digest, Utc::now().to_rfc3339()],
+            )
+            .map_err(|e| format!("MIGRATION_0003_RECORD:{e}"))?;
+        transaction
+            .commit()
+            .map_err(|e| format!("MIGRATION_0003_COMMIT:{e}"))?;
+        version = 3;
     }
     if version != CURRENT_SCHEMA_VERSION {
         return Err("DB_MIGRATION_STATE_INVALID".to_string());
@@ -140,11 +249,19 @@ pub fn load_database_key(app_data_dir: &Path) -> Result<Zeroizing<[u8; 32]>, Str
     Ok(Zeroizing::new(key))
 }
 
+/// Apply the SQLCipher key to a connection.
+///
+/// Only `PRAGMA key` is issued. `cipher_memory_security` is not used: it is
+/// a process-wide one-way switch, and the "enhanced memory security" mode it
+/// enables terminates the process with a stack overflow in the bundled
+/// SQLCipher. The key itself does not need that mode: it is protected by
+/// Windows DPAPI at rest, and the Rust-side copies are zeroized.
 pub fn set_sqlcipher_key(connection: &Connection, key: &[u8; 32]) -> Result<(), String> {
     let key_hex = hex::encode(key);
-    connection.execute_batch(&format!(
-        "PRAGMA key = \"x'{key_hex}'\";\n         PRAGMA cipher_compatibility = 4;\n         PRAGMA cipher_memory_security = ON;"
-    )).map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
+    // The generated key is hex-only, so this PRAGMA cannot carry user input.
+    connection
+        .execute_batch(&format!("PRAGMA key = \"x'{key_hex}'\";"))
+        .map_err(|_| "DB_KEY_INIT_FAILED".to_string())?;
     let cipher_version: String = connection
         .query_row("PRAGMA cipher_version", [], |row| row.get(0))
         .map_err(|_| "SQLCIPHER_REQUIRED".to_string())?;
@@ -197,8 +314,7 @@ fn seed_catalog_defaults(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
         tx.execute("INSERT INTO categories(id,branch_id,name_ar,name_en,sort_order) VALUES(?1,?2,?3,?4,?5)",
             rusqlite::params![id, BRANCH_ID, name_ar, name_en, sort_order]).map_err(|e| format!("SEED_CATEGORY:{e}"))?;
     }
-    let mut size_num = 201u32;
-    for (profile, code, name_ar, name_en, order) in [
+    for (index, (profile, code, name_ar, name_en, order)) in [
         ("CLOTHING", "XS", "صغير جدًا", "Extra small", 10),
         ("CLOTHING", "S", "صغير", "Small", 20),
         ("CLOTHING", "M", "متوسط", "Medium", 30),
@@ -211,11 +327,14 @@ fn seed_catalog_defaults(tx: &rusqlite::Transaction<'_>) -> Result<(), String> {
         ("NUMERIC", "32", "32", "32", 30),
         ("NUMERIC", "34", "34", "34", 40),
         ("NUMERIC", "36", "36", "36", 50),
-    ] {
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let size_num = 201u32 + index as u32;
         let id = format!("00000000-0000-4000-8000-{size_num:012}");
         tx.execute("INSERT INTO sizes(id,branch_id,profile_code,size_code,name_ar,name_en,sort_order) VALUES(?1,?2,?3,?4,?5,?6,?7)",
             rusqlite::params![id, BRANCH_ID, profile, code, name_ar, name_en, order]).map_err(|e| format!("SEED_SIZE:{e}"))?;
-        size_num += 1;
     }
     let colors = [
         (301, "BLACK", "أسود", "Black", "#292C32"),
