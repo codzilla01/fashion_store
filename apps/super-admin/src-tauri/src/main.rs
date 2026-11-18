@@ -140,7 +140,7 @@ fn status_of(state: &AppState) -> Result<VaultStatus, String> {
         .seed
         .lock()
         .map_err(|_| "VAULT_LOCK_FAILED".to_string())?;
-    let public_key_hex = guard.as_ref().map(|seed| vault::public_key_hex(seed));
+    let public_key_hex = guard.as_ref().map(vault::public_key_hex);
     Ok(VaultStatus {
         exists: vault_path(state).exists(),
         unlocked: guard.is_some(),
