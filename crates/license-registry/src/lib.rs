@@ -339,6 +339,7 @@ pub fn issue_license(
         .clone()
         .or_else(|| options.request_path.parent().map(Path::to_path_buf))
         .unwrap_or_else(|| PathBuf::from("."));
+    fs::create_dir_all(&output_dir).map_err(|error| error.to_string())?;
     let output = output_dir.join(format!(
         "naseej-{plan_code}-{license_id}.lic",
         plan_code = options.plan.code()
@@ -465,6 +466,118 @@ mod tests {
         let records = read_records(&directory).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].customer_id, "customer-test");
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn an_issued_licence_verifies_for_the_requesting_device() {
+        use naseej_license_format::{validate_license_for_device, verify_license};
+
+        let directory = env::temp_dir().join(format!("naseej-registry-e2e-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("temp directory");
+        let request = ActivationRequest {
+            schema_version: ACTIVATION_REQUEST_SCHEMA_VERSION,
+            request_id: Uuid::new_v4().to_string(),
+            product: PRODUCT_CODE.into(),
+            app_version: "0.1.0".into(),
+            requested_at_utc: Utc::now().to_rfc3339(),
+            device_fingerprint: "b".repeat(64),
+        };
+        let request_path = directory.join("customer.req");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request bytes"),
+        )
+        .expect("request file");
+
+        let signing_key = SigningKey::from_bytes(&[9u8; 32]);
+        let registry_dir = directory.join("registry");
+        let outcome = issue_license(
+            &signing_key,
+            IssueOptions {
+                request_path: request_path.clone(),
+                customer_id: "CUST-E2E".into(),
+                plan: Plan::Trial7d,
+                starts_at_utc: None,
+                requested_features: vec!["pos.sell".into()],
+                max_users: 3,
+                max_branches: 1,
+                registry_dir: registry_dir.clone(),
+                output_dir: Some(directory.join("licenses")),
+            },
+        )
+        .expect("the licence is issued");
+
+        let bytes = fs::read(&outcome.license_path).expect("licence file");
+        let envelope: SignedLicense =
+            serde_json::from_slice(&bytes).expect("licence envelope");
+        let public_key = signing_key.verifying_key();
+        verify_license(&envelope, &public_key).expect("the licence verifies");
+        validate_license_for_device(
+            &envelope,
+            &public_key,
+            &request.device_fingerprint,
+            Utc::now(),
+        )
+        .expect("the licence is valid for the device that asked for it");
+        assert!(
+            validate_license_for_device(&envelope, &public_key, &"c".repeat(64), Utc::now())
+                .is_err(),
+            "the licence must not open on another device"
+        );
+
+        let not_before = DateTime::parse_from_rfc3339(&envelope.payload.not_before_utc)
+            .expect("start")
+            .with_timezone(&Utc);
+        let expires = DateTime::parse_from_rfc3339(&envelope.payload.expires_at_utc)
+            .expect("end")
+            .with_timezone(&Utc);
+        assert_eq!(expires - not_before, Duration::days(7));
+
+        let records = read_records(&registry_dir).expect("registry");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].license_id, outcome.license_id);
+        assert_eq!(records[0].plan_code, PLAN_TRIAL_7D);
+        fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn the_same_request_is_not_issued_twice() {
+        let directory = env::temp_dir().join(format!("naseej-registry-dup-{}", Uuid::new_v4()));
+        fs::create_dir_all(&directory).expect("temp directory");
+        let request = ActivationRequest {
+            schema_version: ACTIVATION_REQUEST_SCHEMA_VERSION,
+            request_id: Uuid::new_v4().to_string(),
+            product: PRODUCT_CODE.into(),
+            app_version: "0.1.0".into(),
+            requested_at_utc: Utc::now().to_rfc3339(),
+            device_fingerprint: "d".repeat(64),
+        };
+        let request_path = directory.join("customer.req");
+        fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&request).expect("request bytes"),
+        )
+        .expect("request file");
+        let signing_key = SigningKey::from_bytes(&[4u8; 32]);
+        let registry_dir = directory.join("registry");
+        let options = || IssueOptions {
+            request_path: request_path.clone(),
+            customer_id: "CUST-DUP".into(),
+            plan: Plan::Annual12m,
+            starts_at_utc: None,
+            requested_features: vec!["pos.sell".into()],
+            max_users: 1,
+            max_branches: 1,
+            registry_dir: registry_dir.clone(),
+            output_dir: Some(directory.join("licenses")),
+        };
+        issue_license(&signing_key, options()).expect("the first licence is issued");
+        let second = issue_license(&signing_key, options());
+        assert!(
+            second.is_err(),
+            "the same request must not produce a second licence"
+        );
         fs::remove_dir_all(directory).ok();
     }
 
