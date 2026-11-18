@@ -330,13 +330,17 @@ mod tests {
         let signing_key = p256::ecdsa::SigningKey::from_bytes(&[7u8; 32].into())
             .expect("the signing key material is valid");
         let public_key = Es256PublicKey {
-            x: signing_key.verifying_key().to_encoded_point(false)
+            x: signing_key
+                .verifying_key()
+                .to_encoded_point(false)
                 .as_bytes()
                 .get(1..33)
                 .expect("x coordinate")
                 .try_into()
                 .expect("x coordinate is 32 bytes"),
-            y: signing_key.verifying_key().to_encoded_point(false)
+            y: signing_key
+                .verifying_key()
+                .to_encoded_point(false)
                 .as_bytes()
                 .get(33..65)
                 .expect("y coordinate")

@@ -486,10 +486,7 @@ pub fn owner_panel_begin_assertion(
         challenge: encode(&challenge_bytes),
         rp_id,
         user_id: owner.user_id,
-        credential_ids: credentials
-            .iter()
-            .map(|(bytes, _)| encode(bytes))
-            .collect(),
+        credential_ids: credentials.iter().map(|(bytes, _)| encode(bytes)).collect(),
         expires_in_seconds: CHALLENGE_LIFETIME.as_secs() as i64,
     })
 }
@@ -605,12 +602,8 @@ pub fn owner_panel_finish_assertion(
     }
     let client_data: webauthn::ClientData = serde_json::from_slice(&client_data_json)
         .map_err(|_| "OWNER_CLIENT_DATA_INVALID".to_string())?;
-    if webauthn::verify_client_data(
-        &client_data,
-        "webauthn.get",
-        &encode(&expected_challenge),
-    )
-    .is_err()
+    if webauthn::verify_client_data(&client_data, "webauthn.get", &encode(&expected_challenge))
+        .is_err()
     {
         register_failure(&state)?;
         return Err("OWNER_CLIENT_DATA_INVALID".to_string());
@@ -718,7 +711,8 @@ pub fn owner_panel_finish_registration(
     state: tauri::State<'_, AppState>,
     input: RegistrationInput,
 ) -> Result<OwnerCredential, String> {
-    let session = require_owner_session(&state, &input_challenge_owner(&state, &input.challenge_id)?)?;
+    let session =
+        require_owner_session(&state, &input_challenge_owner(&state, &input.challenge_id)?)?;
     let attestation_object = decode(&input.attestation_object)?;
     let client_data_json = decode(&input.client_data_json)?;
     let credential_id = decode(&input.credential_id)?;
@@ -906,7 +900,10 @@ pub fn owner_panel_revoke_credential(
 
 /// Lock the panel.
 #[tauri::command]
-pub fn owner_panel_lock(state: tauri::State<'_, AppState>, owner_token: String) -> Result<(), String> {
+pub fn owner_panel_lock(
+    state: tauri::State<'_, AppState>,
+    owner_token: String,
+) -> Result<(), String> {
     state
         .owner_sessions
         .lock()
@@ -960,8 +957,8 @@ pub fn owner_panel_overview(
         )
         .optional()
         .map_err(crate::commands::db_error)?;
-    let return_policy = policy_json
-        .and_then(|json| serde_json::from_str::<ReturnPolicy>(&json).ok());
+    let return_policy =
+        policy_json.and_then(|json| serde_json::from_str::<ReturnPolicy>(&json).ok());
 
     let users_by_role = {
         let mut statement = db
@@ -1115,7 +1112,8 @@ pub fn persist_return_policy(
     {
         return Err("RETURN_POLICY_INVALID".to_string());
     }
-    let value = serde_json::to_string(policy).map_err(|_| "RETURN_POLICY_SERIALIZE_FAILED".to_string())?;
+    let value =
+        serde_json::to_string(policy).map_err(|_| "RETURN_POLICY_SERIALIZE_FAILED".to_string())?;
     let now = Utc::now().to_rfc3339();
     tx.execute(
         "INSERT INTO system_settings(branch_id,setting_key,setting_value_json,version,changed_by,changed_at)
