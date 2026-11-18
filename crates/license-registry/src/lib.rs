@@ -509,8 +509,7 @@ mod tests {
         .expect("the licence is issued");
 
         let bytes = fs::read(&outcome.license_path).expect("licence file");
-        let envelope: SignedLicense =
-            serde_json::from_slice(&bytes).expect("licence envelope");
+        let envelope: SignedLicense = serde_json::from_slice(&bytes).expect("licence envelope");
         let public_key = signing_key.verifying_key();
         verify_license(&envelope, &public_key).expect("the licence verifies");
         validate_license_for_device(
