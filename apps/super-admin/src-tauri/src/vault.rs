@@ -123,7 +123,7 @@ pub fn unlock(path: &Path, passphrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>
 
 /// The public key that belongs to a seed.
 pub fn public_key_hex(seed: &Zeroizing<[u8; SEED_LEN]>) -> String {
-    let signing_key = SigningKey::from_bytes(seed.as_ref());
+    let signing_key = SigningKey::from_bytes(seed);
     hex::encode(signing_key.verifying_key().to_bytes())
 }
 

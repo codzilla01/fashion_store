@@ -97,11 +97,6 @@ type OwnerOverview = {
 
 type OwnerTab = 'overview' | 'returns' | 'tax' | 'security';
 
-const CONDITION_LABELS: Record<string, { ar: string; en: string }> = {
-  UNOPENED: { ar: 'بحالةWebpack فتحها (غير مستعملة)', en: 'Unopened' },
-  NEW_TAGS: { ar: 'بالبطاقة والليبل', en: 'With tags' },
-};
-
 const messages = {
   ar: {
     title: 'لوحة تحكم المالك',
@@ -110,6 +105,8 @@ const messages = {
     unlock: 'فتح اللوحة',
     unlockHint: 'اضغط مطوّلًا على شعار التطبيق في أي وقت لفتح هذه اللوحة.',
     biometric: 'فتح ببصمة الجهاز',
+    biometricShort: 'بصمة الجهاز',
+    passwordShort: 'كلمة المرور',
     biometricHint: 'Windows Hello على الكمبيوتر، أو بصمة الجهاز على الجوال.',
     biometricUnavailable: 'بصمة الجهاز غير متاحة على هذا الجهاز — استخدم كلمة المرور.',
     passwordFallback: 'أو الدخول بكلمة مرور المالك',
@@ -164,6 +161,8 @@ const messages = {
     unlock: 'Unlock the panel',
     unlockHint: 'Long press the application logo at any time to open this panel.',
     biometric: 'Unlock with the device fingerprint',
+    biometricShort: 'Device fingerprint',
+    passwordShort: 'Password',
     biometricHint: 'Windows Hello on a computer, or the device fingerprint on a phone.',
     biometricUnavailable: 'No device fingerprint on this machine — use the password instead.',
     passwordFallback: 'Or sign in with the owner password',
@@ -513,7 +512,12 @@ export default function OwnerPanel({ lang, onClose }: { lang: Lang; onClose: () 
           </div>
           <div className="owner-head-actions">
             {stage === 'panel' && (
-              <button className="owner-ghost-button" type="button" onClick={() => void lockPanel()}>{t.lock}</button>
+              <>
+                <span className="owner-auth-method">
+                  {authMethod === 'BIOMETRIC' ? t.biometricShort : t.passwordShort}
+                </span>
+                <button className="owner-ghost-button" type="button" onClick={() => void lockPanel()}>{t.lock}</button>
+              </>
             )}
             <button className="owner-ghost-button" type="button" onClick={onClose}>{t.close}</button>
           </div>

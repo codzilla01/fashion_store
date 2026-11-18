@@ -270,6 +270,7 @@ fn list_subscriptions(state: tauri::State<'_, AppState>) -> Result<Vec<Subscript
         .into_iter()
         .map(|record| {
             let revoked = revocation_path(&state, &record.license_id).exists();
+            let status = SubscriptionStatus::of(&record, now).code().to_string();
             SubscriptionRow {
                 license_id: record.license_id,
                 request_id: record.request_id,
@@ -282,7 +283,7 @@ fn list_subscriptions(state: tauri::State<'_, AppState>) -> Result<Vec<Subscript
                 license_file: record.license_file,
                 features: record.features,
                 limits: record.limits,
-                status: SubscriptionStatus::of(&record, now).code().to_string(),
+                status,
                 revoked,
             }
         })
@@ -340,7 +341,7 @@ fn issue_subscription(
             .lock()
             .map_err(|_| "VAULT_LOCK_FAILED".to_string())?;
         let seed = guard.as_ref().ok_or_else(|| "VAULT_LOCKED".to_string())?;
-        ed25519_dalek::SigningKey::from_bytes(seed.as_ref())
+        ed25519_dalek::SigningKey::from_bytes(seed)
     };
 
     let outcome = issue_license(
