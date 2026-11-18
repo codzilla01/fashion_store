@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 
 type Lang = 'ar' | 'en';
+
+/** The two colour themes. The dark theme swaps the CSS custom properties. */
+type Theme = 'light' | 'dark';
+
+const THEME_KEY = 'naseej-pos-theme';
 type CategoryKey = 'all' | 'shirts' | 'trousers' | 'dresses' | 'jackets' | 'basics';
 type PayMethod = 'CASH' | 'CARD' | 'WALLET';
 
@@ -202,6 +207,8 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12h4',
     chevronDown: 'm6 9 6 6 6-6',
     warning: 'M12 3 1.5 21h21L12 3Zm0 6v6m0 3v.01',
+    sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM12 1v2m0 18v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2m18 0h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
+    moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z',
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name] ?? paths.grid} /></svg>;
 }
@@ -314,6 +321,21 @@ function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const t = words[lang];
   const dir = lang === 'ar' ? 'rtl' : 'ltr';
+
+  // The theme is a device preference, not a store setting: it is stored in the
+  // browser profile so it survives restarts without touching the database.
+  const [theme, setTheme] = useState<Theme>(() => {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === 'light' || stored === 'dark') return stored;
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
 
   useEffect(() => {
     const native = Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -1086,7 +1108,10 @@ function App() {
           </form>}
           <div className="auth-foot"><span className="status-dot" />{lang === 'ar' ? 'البيانات محفوظة محليًا ومشفّرة' : 'Data is encrypted and stored locally'}</div>
         </section>
-        <button className="auth-language" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}>{lang === 'ar' ? 'English' : 'العربية'}</button>
+        <div className="auth-top-actions">
+          <button className="auth-language" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}>{lang === 'ar' ? 'English' : 'العربية'}</button>
+          <button className="auth-theme-button" onClick={toggleTheme} aria-label={lang === 'ar' ? 'تبديل النمط' : 'Toggle theme'}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} /></button>
+        </div>
       </div>
     );
   }
@@ -1119,6 +1144,7 @@ function App() {
             <div className="status-chip"><span className="status-dot" />{lang === 'ar' ? 'يعمل دون اتصال' : 'Offline ready'}</div>
             {branches.length > 0 && <select className="branch-switcher" value={activeBranchId} onChange={(event) => void changeBranch(event.target.value)} aria-label={lang === 'ar' ? 'الفرع النشط' : 'Active branch'}>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {lang === 'ar' ? branch.nameAr : branch.nameEn}</option>)}</select>}
             <button className="language-button" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} aria-label="Change language">{lang === 'ar' ? 'EN' : 'عربي'}<Icon name="chevronDown" size={13} /></button>
+            <button className="language-button theme-button" onClick={toggleTheme} aria-label={lang === 'ar' ? 'تبديل النمط الليلي والنهاري' : 'Toggle dark and light theme'} title={lang === 'ar' ? 'النمط' : 'Theme'}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} /></button>
             <div className="cashier-info"><div className="avatar">{(desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')).slice(0, 1)}</div><div className="cashier-copy"><strong>{desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')}</strong><small>{t.cashier} · {t.shift}</small></div><Icon name="chevronDown" size={14} /></div>
           </div>
         </header>
