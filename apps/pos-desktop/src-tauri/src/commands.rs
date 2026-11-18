@@ -468,13 +468,11 @@ pub struct ReturnableInvoice {
     pub lines: Vec<ReturnableInvoiceLine>,
 }
 
-#[derive(Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ReturnPolicyConfig {
-    pub period_days: i64,
-    pub allow_discounted_items: bool,
-    pub restock_conditions: Vec<String>,
-}
+/// The return policy the owner controls from the control panel.
+///
+/// The type lives in the owner panel module because the panel writes it and
+/// the returns desk reads it; there is only one shape for both.
+pub type ReturnPolicyConfig = crate::owner_panel::ReturnPolicy;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1674,41 +1672,55 @@ pub fn configure_return_policy(
     policy: ReturnPolicyConfig,
 ) -> Result<(), String> {
     let session = require_permission(&state, &session_token, "settings.manage")?;
-    if !(1..=180).contains(&policy.period_days)
-        || policy.restock_conditions.is_empty()
-        || policy
-            .restock_conditions
-            .iter()
-            .any(|condition| !matches!(condition.as_str(), "UNOPENED" | "NEW_TAGS"))
-    {
-        return Err("RETURN_POLICY_INVALID".to_string());
-    }
-    let value =
-        serde_json::to_string(&policy).map_err(|_| "RETURN_POLICY_SERIALIZE_FAILED".to_string())?;
     let mut db = state.db.lock().map_err(|_| "DB_LOCK_FAILED".to_string())?;
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(db_error)?;
-    let now = Utc::now().to_rfc3339();
+    crate::owner_panel::persist_return_policy(&tx, &session.branch_id, &session.user_id, &policy)?;
+    tx.commit().map_err(db_error)
+}
+
+/// Write the tax settings of a branch and record the change.
+///
+/// The owner controls this from the control panel; the same rule is used by
+/// every invoice, so the tax that is stored here is the tax that is charged.
+pub fn persist_tax(
+    tx: &Transaction<'_>,
+    branch_id: &str,
+    actor_user_id: &str,
+    tax_rate_bps: i64,
+    prices_include_tax: bool,
+) -> Result<(), String> {
+    if !(0..=10000).contains(&tax_rate_bps) {
+        return Err("TAX_RATE_INVALID".to_string());
+    }
     tx.execute(
-        "INSERT INTO system_settings(branch_id,setting_key,setting_value_json,version,changed_by,changed_at)
-         VALUES(?1,'returns_policy',?2,1,?3,?4)
-         ON CONFLICT(branch_id,setting_key) DO UPDATE SET setting_value_json=excluded.setting_value_json,version=system_settings.version+1,changed_by=excluded.changed_by,changed_at=excluded.changed_at",
-        params![session.branch_id, value, session.user_id, now],
-    ).map_err(db_error)?;
+        "UPDATE branches SET tax_rate_bps=?1, prices_include_tax=?2 WHERE id=?3",
+        params![
+            tax_rate_bps,
+            if prices_include_tax { 1 } else { 0 },
+            branch_id
+        ],
+    )
+    .map_err(db_error)?;
+    let now = Utc::now().to_rfc3339();
+    let audit_id = Uuid::new_v4().to_string();
+    let details =
+        serde_json::json!({"tax_rate_bps": tax_rate_bps, "prices_include_tax": prices_include_tax})
+            .to_string();
     insert_audit(
-        &tx,
-        &Uuid::new_v4().to_string(),
-        Some(&session.branch_id),
-        Some(&session.user_id),
-        "RETURN_POLICY_CHANGED",
-        "setting",
-        Some("returns_policy"),
-        Some("Owner/manager configured return rules"),
-        "{}",
+        tx,
+        &audit_id,
+        Some(branch_id),
+        Some(actor_user_id),
+        "TAX_SETTINGS_CHANGED",
+        "branch",
+        Some(branch_id),
+        Some("Owner confirmed tax setup"),
+        &details,
         &now,
     )?;
-    tx.commit().map_err(db_error)
+    Ok(())
 }
 
 #[tauri::command]
@@ -3783,39 +3795,17 @@ pub fn configure_tax(
     tax_rate_bps: i64,
     prices_include_tax: bool,
 ) -> Result<(), String> {
-    if !(0..=10000).contains(&tax_rate_bps) {
-        return Err("TAX_RATE_INVALID".to_string());
-    }
     let session = require_permission(&state, &session_token, "settings.manage")?;
     let mut db = state.db.lock().map_err(|_| "DB_LOCK_FAILED".to_string())?;
     let tx = db
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(db_error)?;
-    tx.execute(
-        "UPDATE branches SET tax_rate_bps=?1, prices_include_tax=?2 WHERE id=?3",
-        params![
-            tax_rate_bps,
-            if prices_include_tax { 1 } else { 0 },
-            session.branch_id
-        ],
-    )
-    .map_err(db_error)?;
-    let now = Utc::now().to_rfc3339();
-    let audit_id = Uuid::new_v4().to_string();
-    let details =
-        serde_json::json!({"tax_rate_bps": tax_rate_bps, "prices_include_tax": prices_include_tax})
-            .to_string();
-    insert_audit(
+    persist_tax(
         &tx,
-        &audit_id,
-        Some(&session.branch_id),
-        Some(&session.user_id),
-        "TAX_SETTINGS_CHANGED",
-        "branch",
-        Some(&session.branch_id),
-        Some("Owner confirmed tax setup"),
-        &details,
-        &now,
+        &session.branch_id,
+        &session.user_id,
+        tax_rate_bps,
+        prices_include_tax,
     )?;
     tx.commit().map_err(db_error)
 }
@@ -3931,6 +3921,16 @@ fn hash_password(password: &str) -> Result<String, String> {
     Ok(phc.to_string())
 }
 
+/// Verify a password against a stored Argon2id hash.
+///
+/// The owner panel uses the same verification as the sign in, so a password
+/// that opens the panel is the password of the owner account.
+pub(crate) fn verify_password(password: &str, parsed: &PasswordHash) -> Result<(), String> {
+    argon2_instance()?
+        .verify_password(password.as_bytes(), parsed)
+        .map_err(|_| "PASSWORD_INVALID".to_string())
+}
+
 fn argon2_instance() -> Result<Argon2<'static>, String> {
     let params =
         Params::new(64 * 1024, 3, 1, None).map_err(|_| "ARGON2_CONFIG_INVALID".to_string())?;
@@ -3973,7 +3973,7 @@ fn rounded_signed_ratio(numerator: i128, denominator: i128) -> Result<i64, Strin
 /// The parameters mirror the `audit_log` columns one for one, which is why
 /// they are kept positional rather than grouped into a struct.
 #[allow(clippy::too_many_arguments)]
-fn insert_audit(
+pub(crate) fn insert_audit(
     tx: &Transaction<'_>,
     id: &str,
     branch_id: Option<&str>,
@@ -4028,7 +4028,7 @@ fn normalize_phone(input: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
-fn db_error(error: rusqlite::Error) -> String {
+pub(crate) fn db_error(error: rusqlite::Error) -> String {
     // Do not expose SQL values, customer data, or DB paths to the WebView.
     format!(
         "DATABASE_ERROR:{}",

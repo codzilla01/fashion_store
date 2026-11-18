@@ -10,7 +10,9 @@ pub mod backup;
 pub mod commands;
 pub mod db;
 pub mod license;
+pub mod owner_panel;
 pub mod printing;
+pub mod webauthn;
 
 /// Re-exported so integration tests can query the encrypted database
 /// without adding a second `rusqlite` dependency.
@@ -29,6 +31,14 @@ pub struct Session {
 pub struct AppState {
     pub db: Mutex<Connection>,
     pub sessions: Mutex<HashMap<String, Session>>,
+    /// The sessions of the owner control panel.
+    ///
+    /// They are kept apart from the working sessions on purpose: the panel
+    /// is a separate surface with its own lifetime, and a panel session must
+    /// never be mistaken for a signed in cashier.
+    pub owner_sessions: Mutex<HashMap<String, owner_panel::OwnerSession>>,
+    /// The failed unlock attempts of the owner control panel.
+    pub owner_attempts: Mutex<owner_panel::OwnerAttempts>,
     pub app_data_dir: PathBuf,
     pub personal_data_key: Zeroizing<[u8; 32]>,
 }
@@ -45,6 +55,8 @@ impl AppState {
         let state = Self {
             db: Mutex::new(db),
             sessions: Mutex::new(HashMap::new()),
+            owner_sessions: Mutex::new(HashMap::new()),
+            owner_attempts: Mutex::new(owner_panel::OwnerAttempts::default()),
             app_data_dir,
             personal_data_key: Zeroizing::new(personal_data_key),
         };

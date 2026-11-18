@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-
-type Lang = 'ar' | 'en';
+import OwnerPanel from './OwnerPanel';
+import type { Lang } from './lang';
 
 /** The two colour themes. The dark theme swaps the CSS custom properties. */
 type Theme = 'light' | 'dark';
@@ -249,6 +249,54 @@ function mapNativeCatalog(rows: NativeCatalogItem[]): Product[] {
   });
 }
 
+/**
+ * Open the owner panel with a long press on the application logo.
+ *
+ * A long press is a deliberate gesture, so the panel is out of the way of
+ * the cashier but still reachable without a menu to hunt through.
+ */
+function useLongPress(onLongPress: () => void, delayMs = 1200) {
+  const timer = useRef<number | null>(null);
+  const holding = useRef(false);
+  const [isHolding, setIsHolding] = useState(false);
+
+  const clear = useCallback(() => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (holding.current) {
+      holding.current = false;
+      setIsHolding(false);
+    }
+  }, []);
+
+  const begin = useCallback(() => {
+    holding.current = true;
+    setIsHolding(true);
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      holding.current = false;
+      setIsHolding(false);
+      onLongPress();
+    }, delayMs);
+  }, [delayMs, onLongPress]);
+
+  useEffect(() => clear, [clear]);
+
+  return {
+    isHolding,
+    handlers: {
+      onPointerDown: begin,
+      onPointerUp: clear,
+      onPointerLeave: clear,
+      onPointerCancel: clear,
+      onContextMenu: (event: React.MouseEvent) => event.preventDefault(),
+    },
+  };
+}
+
 function App() {
   const [lang, setLang] = useState<Lang>('ar');
   const [category, setCategory] = useState<CategoryKey>('all');
@@ -311,12 +359,13 @@ function App() {
   const [taxRateBps, setTaxRateBps] = useState(1400);
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
   const [licenseError, setLicenseError] = useState('');
-  const [pricesIncludeTax, setPricesIncludeTax] = useState(true);
+  const [pricesIncludeTax, setPricesIncludeTax] = useState(false);
   const [authForm, setAuthForm] = useState({ username: '', displayName: '', password: '' });
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [taxRateInput, setTaxRateInput] = useState('14');
-  const [taxInclusiveInput, setTaxInclusiveInput] = useState(true);
+  const [ownerPanelOpen, setOwnerPanelOpen] = useState(false);
+  const [taxInclusiveInput, setTaxInclusiveInput] = useState(false);
   const returnOperationRef = useRef<{ payload: string; key: string }>({ payload: '', key: '' });
   const searchRef = useRef<HTMLInputElement>(null);
   const t = words[lang];
@@ -336,6 +385,11 @@ function App() {
   }, [theme]);
 
   const toggleTheme = () => setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
+
+  // The owner panel opens with a long press on the logo, in the sign in
+  // screen and in the working screen alike.
+  const openOwnerPanel = useCallback(() => setOwnerPanelOpen(true), []);
+  const logoPress = useLongPress(openOwnerPanel);
 
   useEffect(() => {
     const native = Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -1078,8 +1132,9 @@ function App() {
     const taxSetup = gate === 'tax';
     const setup = gate === 'setup';
     return (
+      <>
       <div className="auth-shell" dir={dir}>
-        <div className="auth-brand"><div className="auth-logo">ن</div><div><strong>نسيج</strong><span>{lang === 'ar' ? 'نظام نقاط البيع' : 'Point of sale'}</span></div></div>
+        <div className="auth-brand"><div className={`auth-logo ${logoPress.isHolding ? 'holding' : ''}`} title={lang === 'ar' ? 'اضغط مطولًا للوحة المالك' : 'Long press for the owner panel'} {...logoPress.handlers}>ن</div><div><strong>نسيج</strong><span>{lang === 'ar' ? 'نظام نقاط البيع' : 'Point of sale'}</span></div></div>
         <section className="auth-card">
           <div className="auth-card-mark">{licenseGate || taxSetup ? <Icon name="tag" size={22} /> : <Icon name={checking ? 'clock' : 'user'} size={22} />}</div>
           <div className="auth-eyebrow">{lang === 'ar' ? 'تشغيل محلي آمن' : 'Secure local setup'}</div>
@@ -1113,13 +1168,15 @@ function App() {
           <button className="auth-theme-button" onClick={toggleTheme} aria-label={lang === 'ar' ? 'تبديل النمط' : 'Toggle theme'}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} /></button>
         </div>
       </div>
+      {ownerPanelOpen && <OwnerPanel lang={lang} onClose={() => setOwnerPanelOpen(false)} />}
+      </>
     );
   }
 
   return (
     <div className="app-shell" dir={dir}>
       <aside className="side-rail">
-        <div className="brand-mark" title="نسيج POS"><span>ن</span><i /></div>
+        <div className={`brand-mark ${logoPress.isHolding ? 'holding' : ''}`} title={lang === 'ar' ? 'نسيج POS — اضغط مطولًا للوحة المالك' : 'Naseej POS — long press for the owner panel'} {...logoPress.handlers}><span>ن</span><i /></div>
         <div className="rail-divider" />
           <button className={`rail-button ${activeTab === 'sale' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('sale')} aria-label={t.sale} title={t.sale}><Icon name="bag" /></button>
           <button className={`rail-button ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('inventory')} aria-label={t.inventory} title={t.inventory}><Icon name="box" /></button>
@@ -1138,7 +1195,7 @@ function App() {
 
       <main className="main-area">
         <header className="topbar">
-          <div className="store-name"><div className="store-icon"><span>ن</span></div><div><strong>نسيج</strong><small>{lang === 'ar' ? 'متجر الملابس' : 'Apparel store'}</small></div></div>
+          <div className="store-name"><div className={`store-icon ${logoPress.isHolding ? 'holding' : ''}`} title={lang === 'ar' ? 'اضغط مطولًا للوحة المالك' : 'Long press for the owner panel'} {...logoPress.handlers}><span>ن</span></div><div><strong>نسيج</strong><small>{lang === 'ar' ? 'متجر الملابس' : 'Apparel store'}</small></div></div>
           <div className="topbar-center"><span className="breadcrumb-muted">{lang === 'ar' ? 'نسيج' : 'Naseej'}</span><Icon name="chevron" size={14} /><strong>{t[activeTab]}</strong></div>
           <div className="topbar-actions">
             <div className="status-chip"><span className="status-dot" />{lang === 'ar' ? 'يعمل دون اتصال' : 'Offline ready'}</div>
@@ -1345,6 +1402,7 @@ function App() {
 
       {notice && <div className={`toast ${notice.kind}`} role="status"><span className="toast-symbol">{notice.kind === 'success' ? <Icon name="check" size={17} /> : '!'}</span><span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="إغلاق"><Icon name="close" size={14} /></button></div>}
       {!isTauri && <div className="preview-ribbon"><span className="preview-spark">✦</span>{t.preview}</div>}
+      {ownerPanelOpen && <OwnerPanel lang={lang} onClose={() => setOwnerPanelOpen(false)} />}
     </div>
   );
 }

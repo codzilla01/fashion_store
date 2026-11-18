@@ -573,3 +573,67 @@ kbd { font-family: inherit; border: 1px solid var(--line); background: var(--sur
 [data-theme="dark"] .auth-shell {
   background: radial-gradient(ellipse at 50% 12%, #16201b 0, #0f1512 48%, #0c110f 100%);
 }
+
+/* The owner control panel.
+   The panel is opened with a long press on the logo, so it covers the
+   application while it is open and never sits next to the cashier tools. */
+.owner-overlay { position: fixed; inset: 0; z-index: 60; background: rgba(20, 30, 24, .46); backdrop-filter: blur(3px); display: flex; align-items: center; justify-content: center; padding: 26px; }
+.owner-shell { width: min(940px, 100%); max-height: min(88vh, 780px); background: var(--surface); border: 1px solid var(--line); border-radius: 18px; box-shadow: 0 26px 70px rgba(24, 38, 30, .22); display: flex; flex-direction: column; overflow: hidden; }
+.owner-head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.owner-head-brand { display: flex; align-items: center; gap: 11px; }
+.owner-mark { width: 38px; height: 38px; border-radius: 12px; background: var(--brand); color: var(--on-brand); display: grid; place-items: center; font-weight: 800; font-size: 18px; }
+.owner-head-brand strong { display: block; font-size: 13px; }
+.owner-head-brand small { display: block; color: var(--muted); font-size: 9px; margin-top: 3px; }
+.owner-head-actions { display: flex; align-items: center; gap: 8px; }
+.owner-ghost-button { height: 31px; padding: 0 11px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); font-size: 10px; cursor: pointer; }
+.owner-ghost-button:hover:not(:disabled) { border-color: var(--brand-line-strong); color: var(--brand-ink); }
+.owner-ghost-button:disabled { opacity: .55; cursor: not-allowed; }
+.owner-gate { padding: 30px 32px 26px; display: flex; flex-direction: column; gap: 11px; overflow: auto; }
+.owner-gate > * { max-width: 430px; width: 100%; margin-inline: auto; }
+.owner-card-mark { width: 44px; height: 44px; border-radius: 13px; background: var(--brand-soft); color: var(--brand-ink); display: grid; place-items: center; }
+.owner-card-glyph { font-size: 20px; line-height: 1; }
+.owner-gate h1 { margin: 0; font-size: 19px; }
+.owner-gate > p { margin: 0 0 4px; color: var(--muted); font-size: 10px; line-height: 1.8; }
+.owner-primary { height: 42px; border: 0; border-radius: 10px; background: var(--brand); color: var(--on-brand); font-size: 11px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; }
+.owner-primary:hover:not(:disabled) { background: var(--brand-strong); }
+.owner-primary:disabled { opacity: .6; cursor: not-allowed; }
+.owner-hint { color: var(--muted); font-size: 9px; line-height: 1.7; }
+.owner-divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 9px; margin: 4px 0; }
+.owner-divider::before, .owner-divider::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+.owner-body { padding: 18px 20px 22px; overflow: auto; display: flex; flex-direction: column; gap: 15px; }
+.owner-tabs { display: flex; gap: 7px; flex-wrap: wrap; }
+.owner-tabs button { height: 33px; padding: 0 13px; border-radius: 9px; border: 1px solid transparent; background: var(--surface-3); color: var(--ink-2); font-size: 10px; cursor: pointer; }
+.owner-tabs button:hover { color: var(--brand-ink); background: var(--brand-soft); }
+.owner-tabs button.active { background: var(--brand-soft); border-color: var(--brand-line-strong); color: var(--brand-ink); font-weight: 700; }
+.owner-error { margin: 0; }
+.owner-notice { margin: 0; color: var(--brand-ink); }
+.owner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 11px; }
+.owner-card { background: var(--surface-2); border: 1px solid var(--line); border-radius: 13px; padding: 13px 14px; display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.owner-card-label { color: var(--muted); font-size: 9px; }
+.owner-card strong { font-size: 15px; letter-spacing: -.2px; }
+.owner-card strong.ok { color: var(--brand-ink); }
+.owner-card strong.bad { color: var(--danger-ink); }
+.owner-card small { color: var(--muted); font-size: 9px; line-height: 1.6; overflow-wrap: anywhere; }
+.owner-card small.bad { color: var(--danger-ink); }
+.owner-panel-section { display: flex; flex-direction: column; gap: 16px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 13px; padding: 17px 18px; }
+.owner-field { display: flex; flex-direction: column; gap: 7px; }
+.owner-field > label { color: var(--ink-2); font-size: 10px; font-weight: 600; }
+.owner-field input[type="number"] { height: 38px; max-width: 190px; border: 1px solid var(--line); border-radius: 8px; padding: 0 11px; color: var(--ink); background: var(--surface); outline: none; }
+.owner-field input[type="number"]:focus { border-color: var(--brand-line-strong); box-shadow: 0 0 0 3px var(--focus-ring); }
+.owner-field small { color: var(--muted); font-size: 9px; line-height: 1.7; }
+.owner-check { display: flex; align-items: center; gap: 8px; color: var(--ink-2); font-size: 10px; cursor: pointer; }
+.owner-check input { width: 15px; height: 15px; accent-color: var(--brand); }
+.owner-check-list { display: flex; gap: 16px; flex-wrap: wrap; }
+.owner-actions { display: flex; justify-content: flex-start; }
+.owner-actions .owner-primary { padding: 0 22px; }
+.owner-credential-list { display: flex; flex-direction: column; gap: 8px; }
+.owner-credential { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface); }
+.owner-credential strong { display: block; font-size: 10px; }
+.owner-credential small { display: block; color: var(--muted); font-size: 9px; margin-top: 3px; }
+.owner-branch-bar { display: flex; align-items: center; gap: 10px; padding-top: 4px; }
+.owner-branch-bar label { color: var(--muted); font-size: 9px; }
+.owner-branch-bar select { height: 33px; border: 1px solid var(--line); border-radius: 8px; padding: 0 9px; color: var(--ink); background: var(--surface-2); font-size: 10px; }
+
+/* The long press on the logo is visible while it lasts. */
+.auth-logo.holding, .store-icon.holding, .brand-mark.holding { animation: owner-hold 1.2s ease-in-out; box-shadow: 0 0 0 4px var(--focus-ring); }
+@keyframes owner-hold { 0% { transform: scale(1); } 45% { transform: scale(1.14); } 100% { transform: scale(1); } }
