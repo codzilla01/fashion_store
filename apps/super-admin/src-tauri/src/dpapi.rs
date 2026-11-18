@@ -13,6 +13,7 @@
 ///
 /// DPAPI mixes this value into the protection, so a blob of another program
 /// cannot be unprotected with the same account.
+#[cfg(windows)]
 pub const ENTROPY: &[u8] = b"naseej-super-admin-vault-v2";
 
 /// Wrap bytes with DPAPI in the scope of the current Windows user.
