@@ -170,15 +170,30 @@ jobs:
 
       - name: Test license format crate
         working-directory: crates/license-format
-        run: cargo test --color never --all-features
+        run: |
+          set +e
+          cargo test --color never --all-features > /tmp/test-license-format.log 2>&1
+          status=$?
+          cat /tmp/test-license-format.log
+          exit $status
 
       - name: Test license issuer
         working-directory: tools/license-issuer
-        run: cargo test --color never --all-features
+        run: |
+          set +e
+          cargo test --color never --all-features > /tmp/test-issuer.log 2>&1
+          status=$?
+          cat /tmp/test-issuer.log
+          exit $status
 
       - name: Test license registry
         working-directory: crates/license-registry
-        run: cargo test --color never --all-features
+        run: |
+          set +e
+          cargo test --color never --all-features > /tmp/test-registry.log 2>&1
+          status=$?
+          cat /tmp/test-registry.log
+          exit $status
 
       - name: Check super admin crate
         working-directory: apps/super-admin/src-tauri
@@ -209,7 +224,12 @@ jobs:
 
       - name: Test the developer dashboard vault
         working-directory: apps/super-admin/src-tauri
-        run: cargo test --color never --all-features
+        run: |
+          set +e
+          cargo test --color never --all-features > /tmp/test-super.log 2>&1
+          status=$?
+          cat /tmp/test-super.log
+          exit $status
 
       - name: Check activation tool crate
         working-directory: apps/activation-tool/src-tauri
@@ -296,7 +316,7 @@ jobs:
             echo "### Build diagnostics — ${{ matrix.target }}"
             echo
             echo '```'
-            for f in /tmp/pos.log /tmp/act.log /tmp/super.log /tmp/poslib.log /tmp/win.log /tmp/bundle.log /tmp/clippy-license-format.log /tmp/clippy-license-registry.log /tmp/clippy-issuer.log /tmp/clippy-super-admin.log /tmp/clippy-pos.log; do
+            for f in /tmp/pos.log /tmp/act.log /tmp/super.log /tmp/poslib.log /tmp/win.log /tmp/bundle.log /tmp/test-license-format.log /tmp/test-issuer.log /tmp/test-registry.log /tmp/test-super.log /tmp/clippy-license-format.log /tmp/clippy-license-registry.log /tmp/clippy-issuer.log /tmp/clippy-super-admin.log /tmp/clippy-pos.log; do
               if [ -f "$f" ]; then
                 echo "#### $f"
                 echo "#### errors:"
