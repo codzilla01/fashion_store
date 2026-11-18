@@ -32,8 +32,8 @@ const MIN_PASSPHRASE: usize = 12;
 
 /// Derive the encryption key of the vault from the passphrase.
 fn derive_key(passphrase: &str, salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>, String> {
-    let params = Params::new(64 * 1024, 3, 1, None)
-        .map_err(|_| "ARGON2_CONFIG_INVALID".to_string())?;
+    let params =
+        Params::new(64 * 1024, 3, 1, None).map_err(|_| "ARGON2_CONFIG_INVALID".to_string())?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     argon2
@@ -60,7 +60,13 @@ pub fn create(
     let key = derive_key(passphrase, &salt)?;
     let cipher = Aes256Gcm::new(key.as_ref().into());
     let ciphertext = cipher
-        .encrypt(Nonce::from_slice(&nonce), Payload { msg: seed.as_ref(), aad: MAGIC })
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: seed.as_ref(),
+                aad: MAGIC,
+            },
+        )
         .map_err(|_| "VAULT_ENCRYPT_FAILED".to_string())?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;
@@ -86,12 +92,7 @@ pub fn unlock(path: &Path, passphrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>
     if &bytes[0..MAGIC.len()] != MAGIC {
         return Err("VAULT_FILE_INVALID".to_string());
     }
-    let version = u32::from_le_bytes([
-        bytes[8],
-        bytes[9],
-        bytes[10],
-        bytes[11],
-    ]);
+    let version = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
     if version != VERSION {
         return Err("VAULT_VERSION_UNSUPPORTED".to_string());
     }
@@ -106,7 +107,10 @@ pub fn unlock(path: &Path, passphrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>
     let plain = cipher
         .decrypt(
             Nonce::from_slice(&nonce),
-            Payload { msg: ciphertext, aad: MAGIC },
+            Payload {
+                msg: ciphertext,
+                aad: MAGIC,
+            },
         )
         .map_err(|_| "VAULT_PASSPHRASE_WRONG".to_string())?;
     if plain.len() != SEED_LEN {
@@ -147,10 +151,8 @@ mod tests {
     use super::*;
 
     fn temp_file(label: &str) -> std::path::PathBuf {
-        let directory = std::env::temp_dir().join(format!(
-            "naseej-vault-{label}-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("naseej-vault-{label}-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&directory).expect("temp directory");
         directory.join("vault.bin")
     }
@@ -172,7 +174,10 @@ mod tests {
         let seed = generate_seed().expect("seed");
         create(&path, &seed, "a long enough passphrase").expect("vault is created");
         let result = unlock(&path, "another passphrase entirely");
-        assert!(result.is_err(), "a wrong passphrase must not open the vault");
+        assert!(
+            result.is_err(),
+            "a wrong passphrase must not open the vault"
+        );
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 

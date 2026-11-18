@@ -187,10 +187,7 @@ pub fn read_records(registry_dir: &Path) -> Result<Vec<SubscriptionRecord>, Stri
         let record: SubscriptionRecord =
             serde_json::from_slice(&bytes).map_err(|error| error.to_string())?;
         if record.schema_version != REGISTRY_SCHEMA_VERSION {
-            return Err(format!(
-                "unsupported registry record: {}",
-                path.display()
-            ));
+            return Err(format!("unsupported registry record: {}", path.display()));
         }
         records.push(record);
     }
@@ -199,10 +196,7 @@ pub fn read_records(registry_dir: &Path) -> Result<Vec<SubscriptionRecord>, Stri
 }
 
 /// Write one record into a registry directory.
-pub fn write_record(
-    registry_dir: &Path,
-    record: &SubscriptionRecord,
-) -> Result<(), String> {
+pub fn write_record(registry_dir: &Path, record: &SubscriptionRecord) -> Result<(), String> {
     fs::create_dir_all(registry_dir).map_err(|error| error.to_string())?;
     let final_path = registry_dir.join(format!("{}.json", record.license_id));
     let temp_path = registry_dir.join(format!(".{}.json.part", record.license_id));

@@ -405,10 +405,7 @@ fn revoke_subscription(
 
 /// The licence file of a subscription, so it can be handed over again.
 #[tauri::command]
-fn read_license(
-    state: tauri::State<'_, AppState>,
-    license_id: String,
-) -> Result<String, String> {
+fn read_license(state: tauri::State<'_, AppState>, license_id: String) -> Result<String, String> {
     let records = read_records(&state.registry_dir)?;
     let record = records
         .into_iter()
