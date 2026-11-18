@@ -158,15 +158,15 @@ impl<'a> Reader<'a> {
                 20..=24 => Ok(CborValue::Simple(additional)),
                 25 => {
                     let bytes = self.take(2)?;
-                    Ok(CborValue::Float(half_to_f64(
-                        u16::from_be_bytes([bytes[0], bytes[1]]),
-                    )))
+                    Ok(CborValue::Float(half_to_f64(u16::from_be_bytes([
+                        bytes[0], bytes[1],
+                    ]))))
                 }
                 26 => {
                     let bytes = self.take(4)?;
-                    Ok(CborValue::Float(f32::from_be_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3],
-                    ]) as f64))
+                    Ok(CborValue::Float(
+                        f32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64,
+                    ))
                 }
                 27 => {
                     let bytes = self.take(8)?;
@@ -201,10 +201,7 @@ fn half_to_f64(bits: u16) -> f64 {
 
 /// Decode one CBOR document.
 pub fn decode(data: &[u8]) -> Result<CborValue, String> {
-    let mut reader = Reader {
-        data,
-        position: 0,
-    };
+    let mut reader = Reader { data, position: 0 };
     let value = reader.value()?;
     if reader.position != data.len() {
         return Err("CBOR_TRAILING_BYTES".to_string());
@@ -219,9 +216,7 @@ mod tests {
     #[test]
     fn decodes_a_map_of_integers_and_bytes() {
         // {1: 2, 3: -7, -2: h'0102'}
-        let document = [
-            0xa3, 0x01, 0x02, 0x03, 0x26, 0x21, 0x42, 0x01, 0x02,
-        ];
+        let document = [0xa3, 0x01, 0x02, 0x03, 0x26, 0x21, 0x42, 0x01, 0x02];
         let value = decode(&document).expect("the document decodes");
         let entries = value.as_map().expect("a map");
         assert_eq!(entries.len(), 3);
@@ -236,7 +231,9 @@ mod tests {
     #[test]
     fn decodes_a_text_keyed_map() {
         // {"authData": h'010203'}
-        let document = [0xa1, 0x67, 0x61, 0x75, 0x74, 0x68, 0x44, 0x61, 0x74, 0x61, 0x43, 0x01, 0x02, 0x03];
+        let document = [
+            0xa1, 0x67, 0x61, 0x75, 0x74, 0x68, 0x44, 0x61, 0x74, 0x61, 0x43, 0x01, 0x02, 0x03,
+        ];
         let value = decode(&document).expect("the document decodes");
         let entries = value.as_map().expect("a map");
         assert_eq!(entries[0].0.as_text(), Some("authData"));
@@ -247,7 +244,10 @@ mod tests {
     fn refuses_a_truncated_document() {
         assert!(decode(&[0xa1, 0x01]).is_err());
         assert!(decode(&[]).is_err());
-        assert!(decode(&[0xa1, 0x01, 0x02, 0x03]).is_err(), "trailing bytes are refused");
+        assert!(
+            decode(&[0xa1, 0x01, 0x02, 0x03]).is_err(),
+            "trailing bytes are refused"
+        );
     }
 
     #[test]
