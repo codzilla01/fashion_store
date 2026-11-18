@@ -10,6 +10,7 @@
 //! Everything in this module is pure data handling, so it can be exercised
 //! by unit tests without a browser and without an authenticator.
 
+use crate::cbor;
 use p256::ecdsa::{Signature, VerifyingKey, signature::Verifier};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -114,36 +115,30 @@ impl Es256PublicKey {
     }
 }
 
-/// Read an integer out of a CBOR value.
-fn integer_of(value: &ciborium::Value) -> Option<i128> {
-    value.as_integer().map(|integer| integer.0)
-}
-
 /// Read the COSE encoded ES256 public key of a credential.
 ///
 /// The COSE key is a CBOR map with integer labels: 1 is the key type, 3 the
 /// algorithm, -1 the curve, -2 the X coordinate and -3 the Y coordinate.
 pub fn parse_cose_es256_public_key(cose: &[u8]) -> Result<Es256PublicKey, String> {
-    let document = ciborium::from_reader::<ciborium::Value, _>(cose)
-        .map_err(|_| "WEBAUTHN_COSE_KEY_INVALID".to_string())?;
-    let ciborium::Value::Map(entries) = document else {
-        return Err("WEBAUTHN_COSE_KEY_INVALID".to_string());
-    };
+    let document = cbor::decode(cose).map_err(|_| "WEBAUTHN_COSE_KEY_INVALID".to_string())?;
+    let entries = document
+        .as_map()
+        .ok_or_else(|| "WEBAUTHN_COSE_KEY_INVALID".to_string())?;
     let mut key_type: Option<i128> = None;
     let mut algorithm: Option<i128> = None;
     let mut curve: Option<i128> = None;
     let mut x: Option<Vec<u8>> = None;
     let mut y: Option<Vec<u8>> = None;
     for (label, value) in entries {
-        let Some(index) = integer_of(&label) else {
+        let Some(index) = label.as_integer() else {
             continue;
         };
         match index {
-            1 => key_type = integer_of(&value),
-            3 => algorithm = integer_of(&value),
-            -1 => curve = integer_of(&value),
-            -2 => x = value.as_bytes().cloned(),
-            -3 => y = value.as_bytes().cloned(),
+            1 => key_type = value.as_integer(),
+            3 => algorithm = value.as_integer(),
+            -1 => curve = value.as_integer(),
+            -2 => x = value.as_bytes().map(<[u8]>::to_vec),
+            -3 => y = value.as_bytes().map(<[u8]>::to_vec),
             _ => {}
         }
     }

@@ -63,6 +63,7 @@ type UserOption = { id: string; username: string; displayName: string; roleCode:
 type BranchOption = { id: string; code: string; nameAr: string; nameEn: string };
 type BackupHistoryRow = { id: string; status: string; backupKind: string; filename: string | null; byteSize: number | null; startedAt: string; finishedAt: string | null };
 type BackupOperationResult = { status: string; path: string; byteSize: number };
+type ReturnPolicy = { periodDays: number; allowDiscountedItems: boolean; restockConditions: string[] };
 type ReturnableInvoiceLine = { invoiceLineId: string; variantId: string; sku: string; productNameAr: string; productNameEn: string; size: string; color: string; quantity: number; returnedQuantity: number; remainingQuantity: number; lineTotalMinor: number };
 type ReturnableInvoice = { invoiceId: string; invoiceNo: string; status: string; createdAt: string; lines: ReturnableInvoiceLine[] };
 type ReturnSelection = { selected: boolean; quantity: string; itemCondition: string; disposition: string };
@@ -347,6 +348,7 @@ function App() {
   const [backupForm, setBackupForm] = useState({ destinationPath: '', password: '', destinationKind: 'LOCAL' });
   const [restoreForm, setRestoreForm] = useState({ sourcePath: '', password: '' });
   const [returnInvoiceNo, setReturnInvoiceNo] = useState('');
+  const [returnPolicy, setReturnPolicy] = useState<ReturnPolicy | null>(null);
   const [returnableInvoice, setReturnableInvoice] = useState<ReturnableInvoice | null>(null);
   const [returnSelections, setReturnSelections] = useState<Record<string, ReturnSelection>>({});
   const [returnReason, setReturnReason] = useState('');
@@ -561,9 +563,13 @@ function App() {
       } else if (tab === 'users') {
         setUsers(await invoke<UserOption[]>('list_users', { sessionToken }));
       } else if (tab === 'returns') {
-        const rows = await invoke<NativeCatalogItem[]>('get_catalog', { sessionToken });
+        const [rows, policy] = await Promise.all([
+          invoke<NativeCatalogItem[]>('get_catalog', { sessionToken }),
+          invoke<ReturnPolicy>('get_return_policy', { sessionToken }),
+        ]);
         const mapped = mapNativeCatalog(rows);
         setCatalogItems(mapped);
+        setReturnPolicy(policy);
         const firstVariant = mapped.flatMap((product) => product.variants).find((variant) => variant.stock > 0);
         setExchangeVariantId((current) => current || firstVariant?.id || '');
       } else if (tab === 'branches') {
@@ -1369,6 +1375,7 @@ function App() {
               <section className="module-card"><div className="module-card-head"><div><span className="modal-eyebrow">{backupHistory.length} {lang === 'ar' ? 'عمليات حديثة' : 'recent operations'}</span><h2>{lang === 'ar' ? 'سجل النسخ والاستعادة' : 'Backup history'}</h2></div><button className="filter-button" onClick={() => void openWorkspaceTab('backup')}>{lang === 'ar' ? 'تحديث' : 'Refresh'}<Icon name="clock" size={15} /></button></div><div className="module-product-list">{backupHistory.map((row) => <div className="module-product-row" key={row.id}><div className={`stat-icon ${row.status === 'FAILED' ? 'peach' : 'mint'}`}><Icon name={row.status === 'FAILED' ? 'close' : 'backup'} size={16} /></div><div><strong>{row.filename ?? row.backupKind} · {row.status}</strong><small>{row.backupKind} · {new Date(row.startedAt).toLocaleString(lang === 'ar' ? 'ar-EG' : 'en-GB')}{row.byteSize ? ` · ${(row.byteSize / 1024 / 1024).toFixed(1)} MB` : ''}</small></div></div>)}{backupHistory.length === 0 && <div className="empty-table">{lang === 'ar' ? 'لا توجد عمليات مسجلة بعد.' : 'No backup operations recorded yet.'}</div>}</div></section>
             </div>}
             {activeTab === 'returns' && <>
+              {returnPolicy && <div className="policy-strip"><span className="policy-strip-label">{lang === 'ar' ? 'سياسة المرتجعات' : 'Return policy'}</span><span>{lang === 'ar' ? `مدة الاسترجاع ${returnPolicy.periodDays} يومًا` : `${returnPolicy.periodDays} day return window`}</span><span>{returnPolicy.allowDiscountedItems ? (lang === 'ar' ? 'الأصناف المخفّضة قابلة للإرجاع' : 'discounted items may be returned') : (lang === 'ar' ? 'الأصناف المخفّضة غير قابلة للإرجاع' : 'discounted items are refused')}</span><span>{lang === 'ar' ? `الإرجاع للمخزون: ${returnPolicy.restockConditions.map((condition) => condition === 'UNOPENED' ? 'غير مفتوحة' : 'بالبطاقة').join('، ')}` : `Restock: ${returnPolicy.restockConditions.join(', ')}`}</span></div>}
               <div className="module-grid returns-grid">
                 <form className="module-card module-form" onSubmit={findReturnInvoice}><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'إرجاع جزئي' : 'Partial returns'}</span><h2>{lang === 'ar' ? 'العثور على الفاتورة الأصلية' : 'Find original invoice'}</h2></div><div className="stat-icon peach"><Icon name="return" /></div></div><label>{lang === 'ar' ? 'رقم الفاتورة' : 'Invoice number'}<input value={returnInvoiceNo} onChange={(event) => setReturnInvoiceNo(event.target.value)} placeholder="NS-YYYYMMDD-0001" required /></label><button className="auth-submit" type="submit" disabled={workspaceBusy}>{lang === 'ar' ? 'تحميل البنود القابلة للإرجاع' : 'Load returnable lines'}<Icon name="search" size={16} /></button>{returnableInvoice && <div className="auth-helper">{lang === 'ar' ? `الفاتورة ${returnableInvoice.invoiceNo} · ${returnableInvoice.status} · ${new Date(returnableInvoice.createdAt).toLocaleDateString('ar-EG')}` : `Invoice ${returnableInvoice.invoiceNo} · ${returnableInvoice.status} · ${new Date(returnableInvoice.createdAt).toLocaleDateString('en-GB')}`}</div>}</form>
                 <section className="module-card return-lines-card"><div className="module-card-head"><div><span className="modal-eyebrow">{selectedReturnLines.length} {lang === 'ar' ? 'بنود مختارة' : 'selected lines'}</span><h2>{lang === 'ar' ? 'البنود وحالة القطعة' : 'Items and condition'}</h2></div></div>{!returnableInvoice ? <div className="empty-table">{lang === 'ar' ? 'ابحث عن فاتورة لعرض البنود.' : 'Search for an invoice to load its lines.'}</div> : <div className="return-line-list">{returnableInvoice.lines.map((line) => {

@@ -12,7 +12,7 @@
 //! authenticator ceremony that the browser performs and this module
 //! verifies.
 
-use crate::{AppState, webauthn};
+use crate::{AppState, cbor, webauthn};
 use base64::Engine;
 use chrono::Utc;
 use rusqlite::{OptionalExtension, Transaction, params};
@@ -833,16 +833,16 @@ fn input_challenge_owner(state: &AppState, challenge_id: &str) -> Result<String,
 
 /// Read the authenticator data out of an attestation object.
 fn extract_authenticator_data(attestation_object: &[u8]) -> Result<Vec<u8>, String> {
-    let document = ciborium::from_reader::<ciborium::Value, _>(attestation_object)
-        .map_err(|_| "OWNER_ATTESTATION_INVALID".to_string())?;
-    let ciborium::Value::Map(entries) = document else {
-        return Err("OWNER_ATTESTATION_INVALID".to_string());
-    };
+    let document =
+        cbor::decode(attestation_object).map_err(|_| "OWNER_ATTESTATION_INVALID".to_string())?;
+    let entries = document
+        .as_map()
+        .ok_or_else(|| "OWNER_ATTESTATION_INVALID".to_string())?;
     for (label, value) in entries {
         if label.as_text() == Some("authData")
             && let Some(bytes) = value.as_bytes()
         {
-            return Ok(bytes.clone());
+            return Ok(bytes.to_vec());
         }
     }
     Err("OWNER_ATTESTATION_INVALID".to_string())

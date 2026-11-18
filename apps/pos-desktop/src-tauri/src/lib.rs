@@ -7,6 +7,7 @@
 //! mock.
 
 pub mod backup;
+pub mod cbor;
 pub mod commands;
 pub mod db;
 pub mod license;

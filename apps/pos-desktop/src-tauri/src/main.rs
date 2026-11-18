@@ -40,6 +40,7 @@ fn main() {
             naseej_pos::commands::receive_goods,
             naseej_pos::commands::get_sales_summary,
             naseej_pos::commands::get_profit_summary,
+            naseej_pos::commands::get_return_policy,
             naseej_pos::commands::get_returnable_invoice,
             naseej_pos::commands::record_return,
             naseej_pos::commands::create_exchange,

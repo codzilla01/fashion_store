@@ -1723,6 +1723,31 @@ pub fn persist_tax(
     Ok(())
 }
 
+/// The return policy that is in force for the branch of the session.
+///
+/// The returns desk shows the rules to the cashier, and the same rules are
+/// what the backend enforces when a return is recorded.
+#[tauri::command]
+pub fn get_return_policy(
+    state: tauri::State<'_, AppState>,
+    session_token: String,
+) -> Result<ReturnPolicyConfig, String> {
+    let session = require_permission(&state, &session_token, "returns.process")?;
+    let db = state.db.lock().map_err(|_| "DB_LOCK_FAILED".to_string())?;
+    let policy_json: Option<String> = db
+        .query_row(
+            "SELECT setting_value_json FROM system_settings WHERE branch_id=?1 AND setting_key='returns_policy'",
+            params![session.branch_id],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(db_error)?;
+    let policy: ReturnPolicyConfig =
+        serde_json::from_str(&policy_json.ok_or_else(|| "RETURN_POLICY_REQUIRED".to_string())?)
+            .map_err(|_| "RETURN_POLICY_INVALID".to_string())?;
+    Ok(policy)
+}
+
 #[tauri::command]
 pub fn get_returnable_invoice(
     state: tauri::State<'_, AppState>,
