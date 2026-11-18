@@ -125,6 +125,51 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// The smallest label column that still reads well.
+const MIN_LABEL_WIDTH: usize = 8;
+
+/// The time of the receipt in a form that fits on the paper.
+///
+/// The full instant carries the seconds and the zone, and the printer has no
+/// room for them.
+fn short_timestamp(value: &str) -> String {
+    let trimmed = value.trim();
+    let Some((date, time)) = trimmed.split_once('T') else {
+        return trimmed.to_string();
+    };
+    let time = time.split(['+', 'Z']).next().unwrap_or("");
+    let time: String = time.chars().take(5).collect();
+    if time.is_empty() {
+        date.to_string()
+    } else {
+        format!("{date} {time}")
+    }
+}
+
+/// Put a label on the left and a value on the right, inside the paper.
+///
+/// The value keeps its full text, because it carries the money, and the label
+/// keeps its text too. When both do not fit on one line, the value moves to a
+/// line of its own under the label.
+fn label_value(label: &str, value: &str, width: usize) -> String {
+    let value_length = value.chars().count();
+    if value_length >= width {
+        return value.chars().take(width).collect();
+    }
+    let label = if label.chars().count() > width {
+        let mut cut: String = label.chars().take(width - 1).collect();
+        cut.push('…');
+        cut
+    } else {
+        label.to_string()
+    };
+    let label_width = width - value_length;
+    if label_width < MIN_LABEL_WIDTH || label.chars().count() > label_width {
+        return format!("{label}\n{:>width$}", value, width = width);
+    }
+    format!("{:<label_width$}{value}", label, label_width = label_width)
+}
+
 /// Render the receipt as plain text, ready for a character printer.
 pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
     let mut out = String::new();
@@ -148,18 +193,20 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
     out.push('\n');
     out.push_str(&separator);
     out.push('\n');
-    out.push_str(&format!(
-        "{:<16}{:>16}",
-        "التاريخ / Date", receipt.created_at_utc
+    out.push_str(&label_value(
+        "التاريخ / Date",
+        &short_timestamp(&receipt.created_at_utc),
+        width,
     ));
     out.push('\n');
-    out.push_str(&format!(
-        "{:<16}{:>16}",
-        "الكاشير / Cashier", receipt.cashier_name
+    out.push_str(&label_value(
+        "الكاشير / Cashier",
+        &receipt.cashier_name,
+        width,
     ));
     out.push('\n');
     if let Some(customer) = &receipt.customer_name {
-        out.push_str(&format!("{:<16}{:>16}", "العميل / Customer", customer));
+        out.push_str(&label_value("العميل / Customer", customer, width));
         out.push('\n');
     }
     out.push_str(&separator);
@@ -172,26 +219,44 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
             out.push('\n');
         }
         let unit = format_amount(line.unit_price_minor, &receipt.currency_code);
-        out.push_str(&format!(
-            "  {:>3} x {:<12}{:>10}",
-            line.quantity,
-            unit,
-            format_amount(line.total_minor, &receipt.currency_code)
-        ));
+        let total = format_amount(line.total_minor, &receipt.currency_code);
+        let quantity = format!("  {:>3} x", line.quantity);
+        let unit_part = format!(" {unit}");
+        let total_part = format!(" {total}");
+        let together = quantity.chars().count()
+            + unit_part.chars().count()
+            + total_part.chars().count();
+        if together <= width {
+            let unit_width = width - quantity.chars().count() - total_part.chars().count();
+            out.push_str(&format!(
+                "{quantity}{unit_part:<unit_width$}{total_part}",
+                unit_width = unit_width
+            ));
+        } else if quantity.chars().count() + unit_part.chars().count() <= width {
+            // The total moves to a line of its own rather than being cut.
+            out.push_str(&quantity);
+            out.push_str(&unit_part);
+            out.push('\n');
+            out.push_str(&format!("{:>width$}", total, width = width));
+        } else {
+            out.push_str(&quantity);
+            out.push('\n');
+            out.push_str(&unit_part);
+        }
         out.push('\n');
         if line.discount_minor > 0 {
-            out.push_str(&format!(
-                "  {:<28}{:>10}",
-                "خصم / Discount",
-                format_amount(-line.discount_minor, &receipt.currency_code)
+            out.push_str(&label_value(
+                "  خصم / Discount",
+                &format_amount(-line.discount_minor, &receipt.currency_code),
+                width,
             ));
             out.push('\n');
         }
         if line.tax_minor > 0 {
-            out.push_str(&format!(
-                "  {:<28}{:>10}",
-                "ضريبة / Tax",
-                format_amount(line.tax_minor, &receipt.currency_code)
+            out.push_str(&label_value(
+                "  ضريبة / Tax",
+                &format_amount(line.tax_minor, &receipt.currency_code),
+                width,
             ));
             out.push('\n');
         }
@@ -199,48 +264,48 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
 
     out.push_str(&separator);
     out.push('\n');
-    out.push_str(&format!(
-        "{:<16}{:>16}",
+    out.push_str(&label_value(
         "المجموع / Subtotal",
-        format_amount(receipt.subtotal_minor, &receipt.currency_code)
+        &format_amount(receipt.subtotal_minor, &receipt.currency_code),
+        width,
     ));
     out.push('\n');
     if receipt.item_discount_minor > 0 {
-        out.push_str(&format!(
-            "{:<16}{:>16}",
-            "خصم المنتجات / Item disc.",
-            format_amount(-receipt.item_discount_minor, &receipt.currency_code)
+        out.push_str(&label_value(
+            "خصم المنتجات / Disc.",
+            &format_amount(-receipt.item_discount_minor, &receipt.currency_code),
+            width,
         ));
         out.push('\n');
     }
     if receipt.invoice_discount_minor > 0 {
-        out.push_str(&format!(
-            "{:<16}{:>16}",
-            "خصم الفاتورة / Invoice disc.",
-            format_amount(-receipt.invoice_discount_minor, &receipt.currency_code)
+        out.push_str(&label_value(
+            "خصم الفاتورة / Disc.",
+            &format_amount(-receipt.invoice_discount_minor, &receipt.currency_code),
+            width,
         ));
         out.push('\n');
     }
-    out.push_str(&format!(
-        "{:<16}{:>16}",
+    out.push_str(&label_value(
         "الضريبة / Tax",
-        format_amount(receipt.tax_minor, &receipt.currency_code)
+        &format_amount(receipt.tax_minor, &receipt.currency_code),
+        width,
     ));
     out.push('\n');
     out.push_str(&separator);
     out.push('\n');
-    out.push_str(&format!(
-        "{:<16}{:>16}",
+    out.push_str(&label_value(
         "الإجمالي / TOTAL",
-        format_amount(receipt.total_minor, &receipt.currency_code)
+        &format_amount(receipt.total_minor, &receipt.currency_code),
+        width,
     ));
     out.push('\n');
 
     for payment in &receipt.payments {
-        out.push_str(&format!(
-            "{:<16}{:>16}",
-            payment_label(&payment.method),
-            format_amount(payment.amount_minor, &receipt.currency_code)
+        out.push_str(&label_value(
+            &payment_label(&payment.method),
+            &format_amount(payment.amount_minor, &receipt.currency_code),
+            width,
         ));
         out.push('\n');
     }
@@ -685,6 +750,29 @@ mod tests {
                 line.chars().count() <= WIDTH_58,
                 "line longer than the paper: {line}"
             );
+        }
+    }
+
+    #[test]
+    fn a_receipt_with_long_text_stays_inside_the_paper() {
+        let mut receipt = sample_receipt();
+        receipt.customer_name = Some("شركة النسيج للملابس المحدودة".to_string());
+        receipt.cashier_name = "أحمد محمد".to_string();
+        receipt.subtotal_minor = 12_345_678;
+        receipt.tax_minor = 1_728_394;
+        receipt.total_minor = 14_074_072;
+        receipt.lines[0].unit_price_minor = 6_172_839;
+        receipt.lines[0].total_minor = 12_345_678;
+        receipt.payments[0].amount_minor = 14_074_072;
+        for width in [WIDTH_58, WIDTH_80] {
+            let text = render_text(&receipt, width);
+            for line in text.lines() {
+                assert!(
+                    line.chars().count() <= width,
+                    "line longer than the paper: {line}"
+                );
+            }
+            assert!(text.contains("140740.72 EGP"), "the total is kept whole");
         }
     }
 
