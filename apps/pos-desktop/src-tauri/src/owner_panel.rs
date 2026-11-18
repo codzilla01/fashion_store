@@ -139,7 +139,7 @@ pub struct OwnerOverview {
 }
 
 /// One branch of the store.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct BranchSummary {
     pub id: String,
@@ -197,7 +197,7 @@ fn owner_identities(state: &AppState) -> Result<Vec<OwnerIdentity>, String> {
 
 /// Refuse to work while the panel is locked after too many failed attempts.
 fn ensure_not_locked(state: &AppState) -> Result<(), String> {
-    let mut attempts = state
+    let attempts = state
         .owner_attempts
         .lock()
         .map_err(|_| "OWNER_PANEL_LOCK_FAILED".to_string())?;

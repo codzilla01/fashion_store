@@ -68,7 +68,7 @@ pub fn parse_authenticator_data(data: &[u8]) -> Result<AuthenticatorData, String
             return Err("WEBAUTHN_ATTESTED_CREDENTIAL_TRUNCATED".to_string());
         }
         let credential_id_length = u16::from_be_bytes([data[53], data[54]]) as usize;
-        let credential_start = 55;
+        let credential_start: usize = 55;
         let credential_end = credential_start
             .checked_add(credential_id_length)
             .ok_or_else(|| "WEBAUTHN_CREDENTIAL_LENGTH_OVERFLOW".to_string())?;
@@ -114,6 +114,11 @@ impl Es256PublicKey {
     }
 }
 
+/// Read an integer out of a CBOR value.
+fn integer_of(value: &ciborium::Value) -> Option<i128> {
+    value.as_integer().map(|integer| integer.0)
+}
+
 /// Read the COSE encoded ES256 public key of a credential.
 ///
 /// The COSE key is a CBOR map with integer labels: 1 is the key type, 3 the
@@ -130,13 +135,13 @@ pub fn parse_cose_es256_public_key(cose: &[u8]) -> Result<Es256PublicKey, String
     let mut x: Option<Vec<u8>> = None;
     let mut y: Option<Vec<u8>> = None;
     for (label, value) in entries {
-        let Some(index) = label.as_integer() else {
+        let Some(index) = integer_of(&label) else {
             continue;
         };
         match index {
-            1 => key_type = value.as_integer(),
-            3 => algorithm = value.as_integer(),
-            -1 => curve = value.as_integer(),
+            1 => key_type = integer_of(&value),
+            3 => algorithm = integer_of(&value),
+            -1 => curve = integer_of(&value),
             -2 => x = value.as_bytes().cloned(),
             -3 => y = value.as_bytes().cloned(),
             _ => {}
@@ -348,7 +353,7 @@ mod tests {
                 .expect("y coordinate is 32 bytes"),
         };
         let message = b"authenticator data and client data hash";
-        let signature = signing_key.sign(message);
+        let signature: p256::ecdsa::Signature = signing_key.sign(message);
         assert!(verify_es256(&public_key, message, &signature.to_bytes()).is_ok());
         assert!(
             verify_es256(&public_key, b"another message", &signature.to_bytes()).is_err(),
