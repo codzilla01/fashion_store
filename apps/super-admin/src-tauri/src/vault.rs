@@ -1,14 +1,23 @@
 //! The signing key vault of the developer workstation.
 //!
 //! The vault holds the Ed25519 seed that signs customer licences. The seed
-//! never leaves this file in the clear: it is encrypted with a key that is
-//! derived from the passphrase of the operator with Argon2id, and it only
-//! exists in memory while the vault is unlocked.
+//! never leaves this file in the clear and it never leaves the workstation:
+//!
+//! - the seed is encrypted with AES-256-GCM under a random data key,
+//! - the data key is wrapped twice, once with a key that Argon2id derives
+//!   from the passphrase of the operator, and once with Windows DPAPI in the
+//!   scope of the Windows account that created the vault,
+//! - the data key only exists in memory while the vault is unlocked.
+//!
+//! The DPAPI wrap is what binds the vault to the developer machine: a copy of
+//! `vault.bin` on another account or another computer cannot be opened, and
+//! the passphrase alone is not enough without that Windows account.
 //!
 //! The vault belongs to this application only. The customer application
 //! carries the public key and nothing else, so a copy of the POS installer
 //! can never be turned into a licence signer.
 
+use crate::dpapi;
 use aes_gcm::{
     Aes256Gcm, KeyInit, Nonce,
     aead::{Aead, Payload},
@@ -21,7 +30,9 @@ use zeroize::Zeroizing;
 /// The marker at the start of a vault file.
 const MAGIC: &[u8; 8] = b"NSJVAULT";
 /// The format version of the vault file.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+/// The format version that was written before the DPAPI wrap existed.
+const LEGACY_VERSION: u32 = 1;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 const KEY_LEN: usize = 32;
@@ -42,6 +53,94 @@ fn derive_key(passphrase: &str, salt: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>,
     Ok(key)
 }
 
+/// Read a part of the vault file and move the cursor over it.
+fn read_part<'a>(bytes: &'a [u8], cursor: &mut usize, length: usize) -> Result<&'a [u8], String> {
+    let end = cursor
+        .checked_add(length)
+        .ok_or_else(|| "VAULT_FILE_INVALID".to_string())?;
+    if end > bytes.len() {
+        return Err("VAULT_FILE_INVALID".to_string());
+    }
+    let part = &bytes[*cursor..end];
+    *cursor = end;
+    Ok(part)
+}
+
+/// Read a length that is written as four bytes.
+fn read_length(bytes: &[u8], cursor: &mut usize) -> Result<usize, String> {
+    let raw: [u8; 4] = read_part(bytes, cursor, 4)?
+        .try_into()
+        .map_err(|_| "VAULT_FILE_INVALID".to_string())?;
+    Ok(u32::from_le_bytes(raw) as usize)
+}
+
+/// Write the vault file with the data key wrapped for the passphrase and for
+/// the Windows account.
+fn write_vault(
+    path: &Path,
+    seed: &Zeroizing<[u8; SEED_LEN]>,
+    passphrase: &str,
+) -> Result<(), String> {
+    let mut salt = [0u8; SALT_LEN];
+    let mut nonce = [0u8; NONCE_LEN];
+    getrandom::fill(&mut salt).map_err(|_| "CSPRNG_FAILED".to_string())?;
+    getrandom::fill(&mut nonce).map_err(|_| "CSPRNG_FAILED".to_string())?;
+    let mut data_key = Zeroizing::new([0u8; KEY_LEN]);
+    getrandom::fill(data_key.as_mut()).map_err(|_| "CSPRNG_FAILED".to_string())?;
+
+    let passphrase_key = derive_key(passphrase, &salt)?;
+    let passphrase_cipher = Aes256Gcm::new(passphrase_key.as_ref().into());
+    let wrapped_key = passphrase_cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: data_key.as_ref(),
+                aad: MAGIC,
+            },
+        )
+        .map_err(|_| "VAULT_ENCRYPT_FAILED".to_string())?;
+
+    // The Windows account of the developer is the second half of the lock.
+    let account_key = dpapi::protect(data_key.as_ref())?;
+
+    let seed_cipher = Aes256Gcm::new(data_key.as_ref().into());
+    let ciphertext = seed_cipher
+        .encrypt(
+            Nonce::from_slice(&nonce),
+            Payload {
+                msg: seed.as_ref(),
+                aad: MAGIC,
+            },
+        )
+        .map_err(|_| "VAULT_ENCRYPT_FAILED".to_string())?;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let mut file = Vec::with_capacity(
+        MAGIC.len()
+            + 4
+            + SALT_LEN
+            + NONCE_LEN
+            + wrapped_key.len()
+            + account_key.len()
+            + ciphertext.len(),
+    );
+    file.extend_from_slice(MAGIC);
+    file.extend_from_slice(&VERSION.to_le_bytes());
+    file.extend_from_slice(&salt);
+    file.extend_from_slice(&nonce);
+    file.extend_from_slice(&(wrapped_key.len() as u32).to_le_bytes());
+    file.extend_from_slice(&wrapped_key);
+    file.extend_from_slice(&(account_key.len() as u32).to_le_bytes());
+    file.extend_from_slice(&account_key);
+    file.extend_from_slice(&ciphertext);
+    let temp = path.with_extension("tmp");
+    fs::write(&temp, &file).map_err(|error| error.to_string())?;
+    fs::rename(&temp, path).map_err(|error| error.to_string())?;
+    Ok(())
+}
+
 /// Create a vault file that holds the given seed.
 pub fn create(
     path: &Path,
@@ -53,60 +152,97 @@ pub fn create(
             "the vault passphrase must be at least {MIN_PASSPHRASE} characters"
         ));
     }
-    let mut salt = [0u8; SALT_LEN];
-    let mut nonce = [0u8; NONCE_LEN];
-    getrandom::fill(&mut salt).map_err(|_| "CSPRNG_FAILED".to_string())?;
-    getrandom::fill(&mut nonce).map_err(|_| "CSPRNG_FAILED".to_string())?;
-    let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new(key.as_ref().into());
-    let ciphertext = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce),
-            Payload {
-                msg: seed.as_ref(),
-                aad: MAGIC,
-            },
-        )
-        .map_err(|_| "VAULT_ENCRYPT_FAILED".to_string())?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    }
-    let mut file = Vec::with_capacity(MAGIC.len() + 4 + SALT_LEN + NONCE_LEN + ciphertext.len());
-    file.extend_from_slice(MAGIC);
-    file.extend_from_slice(&VERSION.to_le_bytes());
-    file.extend_from_slice(&salt);
-    file.extend_from_slice(&nonce);
-    file.extend_from_slice(&ciphertext);
-    let temp = path.with_extension("tmp");
-    fs::write(&temp, &file).map_err(|error| error.to_string())?;
-    fs::rename(&temp, path).map_err(|error| error.to_string())?;
-    Ok(())
+    write_vault(path, seed, passphrase)
 }
 
 /// Unlock the vault and return the seed it holds.
 pub fn unlock(path: &Path, passphrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
     let bytes = fs::read(path).map_err(|_| "VAULT_FILE_MISSING".to_string())?;
-    if bytes.len() < MAGIC.len() + 4 + SALT_LEN + NONCE_LEN {
+    if bytes.len() < MAGIC.len() + 4 {
         return Err("VAULT_FILE_INVALID".to_string());
     }
     if &bytes[0..MAGIC.len()] != MAGIC {
         return Err("VAULT_FILE_INVALID".to_string());
     }
     let version = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-    if version != VERSION {
-        return Err("VAULT_VERSION_UNSUPPORTED".to_string());
+    match version {
+        VERSION => unlock_v2(&bytes, passphrase),
+        LEGACY_VERSION => {
+            let seed = unlock_legacy(&bytes, passphrase)?;
+            // The vault of the older format is re-wrapped in the format that
+            // is bound to the Windows account, so it is protected from now on.
+            write_vault(path, &seed, passphrase)?;
+            Ok(seed)
+        }
+        _ => Err("VAULT_VERSION_UNSUPPORTED".to_string()),
     }
-    let mut salt = [0u8; SALT_LEN];
-    salt.copy_from_slice(&bytes[12..12 + SALT_LEN]);
-    let mut nonce = [0u8; NONCE_LEN];
-    let nonce_start = 12 + SALT_LEN;
-    nonce.copy_from_slice(&bytes[nonce_start..nonce_start + NONCE_LEN]);
-    let ciphertext = &bytes[nonce_start + NONCE_LEN..];
-    let key = derive_key(passphrase, &salt)?;
-    let cipher = Aes256Gcm::new(key.as_ref().into());
+}
+
+/// Open a vault that carries the DPAPI wrap.
+fn unlock_v2(bytes: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
+    let mut cursor = MAGIC.len() + 4;
+    let salt = read_part(bytes, &mut cursor, SALT_LEN)?;
+    let nonce = read_part(bytes, &mut cursor, NONCE_LEN)?;
+    let wrapped_length = read_length(bytes, &mut cursor)?;
+    let wrapped_key = read_part(bytes, &mut cursor, wrapped_length)?;
+    let account_length = read_length(bytes, &mut cursor)?;
+    let account_key = read_part(bytes, &mut cursor, account_length)?;
+    let remaining = bytes.len() - cursor;
+    let ciphertext = read_part(bytes, &mut cursor, remaining)?;
+
+    let passphrase_key = derive_key(passphrase, salt)?;
+    let passphrase_cipher = Aes256Gcm::new(passphrase_key.as_ref().into());
+    let unwrapped = passphrase_cipher
+        .decrypt(
+            Nonce::from_slice(nonce),
+            Payload {
+                msg: wrapped_key,
+                aad: MAGIC,
+            },
+        )
+        .map_err(|_| "VAULT_PASSPHRASE_WRONG".to_string())?;
+    if unwrapped.len() != KEY_LEN {
+        return Err("VAULT_FILE_INVALID".to_string());
+    }
+
+    // The account of the developer has to be the one that wrapped the key.
+    let account_unwrapped = dpapi::unprotect(account_key)?;
+    if account_unwrapped != unwrapped {
+        return Err("VAULT_USER_MISMATCH".to_string());
+    }
+
+    let mut data_key = Zeroizing::new([0u8; KEY_LEN]);
+    data_key.copy_from_slice(&unwrapped);
+    let seed_cipher = Aes256Gcm::new(data_key.as_ref().into());
+    let plain = seed_cipher
+        .decrypt(
+            Nonce::from_slice(nonce),
+            Payload {
+                msg: ciphertext,
+                aad: MAGIC,
+            },
+        )
+        .map_err(|_| "VAULT_FILE_INVALID".to_string())?;
+    if plain.len() != SEED_LEN {
+        return Err("VAULT_FILE_INVALID".to_string());
+    }
+    let mut seed = Zeroizing::new([0u8; SEED_LEN]);
+    seed.copy_from_slice(&plain);
+    Ok(seed)
+}
+
+/// Open a vault that was written before the DPAPI wrap existed.
+fn unlock_legacy(bytes: &[u8], passphrase: &str) -> Result<Zeroizing<[u8; SEED_LEN]>, String> {
+    let mut cursor = MAGIC.len() + 4;
+    let salt = read_part(bytes, &mut cursor, SALT_LEN)?;
+    let nonce = read_part(bytes, &mut cursor, NONCE_LEN)?;
+    let remaining = bytes.len() - cursor;
+    let ciphertext = read_part(bytes, &mut cursor, remaining)?;
+    let passphrase_key = derive_key(passphrase, salt)?;
+    let cipher = Aes256Gcm::new(passphrase_key.as_ref().into());
     let plain = cipher
         .decrypt(
-            Nonce::from_slice(&nonce),
+            Nonce::from_slice(nonce),
             Payload {
                 msg: ciphertext,
                 aad: MAGIC,
@@ -158,6 +294,34 @@ mod tests {
     }
 
     #[test]
+    fn a_short_passphrase_is_refused() {
+        let path = temp_file("short-passphrase");
+        let seed = generate_seed().expect("seed");
+        let result = create(&path, &seed, "short");
+        assert!(result.is_err(), "a short passphrase must be refused");
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[test]
+    fn the_vault_needs_windows_dpapi() {
+        let path = temp_file("dpapi-availability");
+        let seed = generate_seed().expect("seed");
+        let result = create(&path, &seed, "a long enough passphrase");
+        if cfg!(windows) {
+            assert!(result.is_ok(), "the vault is created on Windows");
+            assert!(unlock(&path, "a long enough passphrase").is_ok());
+        } else {
+            assert_eq!(
+                result.err(),
+                Some("VAULT_DPAPI_UNAVAILABLE".to_string()),
+                "the vault stays closed where DPAPI does not exist"
+            );
+        }
+        fs::remove_dir_all(path.parent().unwrap()).ok();
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn a_vault_round_trips_its_seed() {
         let path = temp_file("round-trip");
         let seed = generate_seed().expect("seed");
@@ -168,6 +332,7 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
+    #[cfg(windows)]
     #[test]
     fn a_wrong_passphrase_is_refused() {
         let path = temp_file("wrong-passphrase");
@@ -181,12 +346,18 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
+    #[cfg(windows)]
     #[test]
-    fn a_short_passphrase_is_refused() {
-        let path = temp_file("short-passphrase");
+    fn a_tampered_vault_is_refused() {
+        let path = temp_file("tampered");
         let seed = generate_seed().expect("seed");
-        let result = create(&path, &seed, "short");
-        assert!(result.is_err(), "a short passphrase must be refused");
+        create(&path, &seed, "a long enough passphrase").expect("vault is created");
+        let mut bytes = fs::read(&path).expect("vault file");
+        let last = bytes.len() - 1;
+        bytes[last] ^= 0xff;
+        fs::write(&path, &bytes).expect("write");
+        let result = unlock(&path, "a long enough passphrase");
+        assert!(result.is_err(), "a tampered vault must not open");
         fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 }

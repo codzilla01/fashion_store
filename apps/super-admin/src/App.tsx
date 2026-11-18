@@ -85,6 +85,7 @@ const text = {
   noSubscriptions: 'لم يُصدر أي اشتراك من هذا الجهاز بعد.',
   noResults: 'لا توجد نتائج مطابقة.',
   vaultWarning: 'مفتاح التوقيع لا يغادر هذا الجهاز. تطبيق العميل يحتوي على المفتاح العام فقط.',
+  vaultDpapi: 'الخزنة مربوطة بحساب Windows لهذا الجهاز: نسخ ملف الخزنة إلى جهاز أو حساب آخر لا يفتحها.',
   offlineNote: 'الإصدار أوفلاين: لا يمكن إلغاء رicense وصلت إلى جهاز غير متصل.',
 };
 
@@ -95,6 +96,10 @@ const errorText: Record<string, string> = {
   VAULT_FILE_MISSING: 'لا يوجد ملف خزنة على هذا الجهاز.',
   VAULT_FILE_INVALID: 'ملف الخزنة غير صالح.',
   VAULT_VERSION_UNSUPPORTED: 'إصدار ملف الخزنة غير مدعوم.',
+  VAULT_DPAPI_UNAVAILABLE: 'هذه الخزنة تحتاج Windows DPAPI. استخدم لوحة المطور على Windows.',
+  VAULT_DPAPI_PROTECT_FAILED: 'تعذر تغليف المفتاح بـWindows DPAPI.',
+  VAULT_DPAPI_UNPROTECT_FAILED: 'تعذر فك تغليف المفتاح بـWindows DPAPI. قد يكون الملف من جهاز أو حساب آخر.',
+  VAULT_USER_MISMATCH: 'الخزنة تخصّ حساب Windows آخر. لا يمكن فتحها على هذا الحساب.',
   REQUEST_INVALID: 'طلب التفعيل غير صالح.',
   PLAN_UNKNOWN: 'الخطة غير معروفة.',
   LICENSE_NOT_FOUND: 'الرخصة غير موجودة في السجل.',
@@ -322,6 +327,7 @@ export default function App() {
             <section className="card">
               <h2>{text.vault}</h2>
               <p>{text.vaultWarning}</p>
+              <p>{text.vaultDpapi}</p>
               <div className="field">
                 <label>{text.publicKey}</label>
                 <div className="key-box mono">{vault?.publicKeyHex ?? '—'}</div>

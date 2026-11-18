@@ -8,6 +8,7 @@
 //! ever knows the public key, so a copy of the POS installer on a customer
 //! machine can never be turned into a licence signer.
 
+mod dpapi;
 mod vault;
 
 use chrono::Utc;

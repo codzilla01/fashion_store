@@ -92,10 +92,18 @@ erDiagram
 - `exchange_groups`: ربط return document بفاتورة الاستبدال وفرق السعر والتسوية. بيع البديل فاتورة جديدة؛ الفرق الموجب يدفع، والسالب يعاد وفق السياسة.
 - حركة المخزون موجبة إلى `SELLABLE` فقط للقطعة التي سمح فحصها؛ القطعة غير الصالحة تسجل في bucket غير قابل للبيع أو تُشطب.
 
+### لوحة المالك والمصادقة
+
+- `owner_credentials`: مفتاح WebAuthn عام لكل بصمة مسجَّلة (credential id، COSE key، counter، signer type)، مع حالة تفعيل وسجل إبطال؛ لا يوجد أي secret.
+- `owner_credential_challenges`: تحدي عشوائي واحد الاستخدام مرتبط بطلب تسجيل/تأكيد، صالح 3 دقائق، ويُحذف أو يُستهلك بعد كل محاولة.
+- `owner_sessions`: جلسة لوحة المالك المنفصلة (وقت البدء، آخر نشاط، idle timeout 15 دقيقة، طريقة الدخول password/biometric، بصمة مرتبطة إن وُجدت).
+- `owner_failed_attempts`: عدّاد المحاولات الفاشلة ونافذة القفل (5 محاولات خلال 10 دقائق) لكل مستخدم/جهاز، والقفل لا يُلغى بإعادة التشغيل لأن العدّاد محفوظ.
+- `owner_license_activations`: سجل تفعيل الرخصة من اللوحة مع البصمة ونتيجة الفحص.
+
 ### التدقيق والإعدادات والنسخ والاستيراد
 
 - `audit_log`: actor/branch/time/action/entity/reason و`prev_hash`/`event_hash`; append-only، لا PII في details.
-- `system_settings`: إعدادات فرع versioned؛ سياسة الخصم والضريبة والمرتجعات وساعة القفل.
+- `system_settings`: إعدادات فرع versioned؛ سياسة الخصم والضريبة والمرتجعات وساعة القفل. مفاتيح سياسة المرتجعات المستخدمة اليوم: `returns_policy.window_days` (14 افتراضيًا)، `returns_policy.allow_discounted_items`، `returns_policy.restock_states`.
 - `backup_jobs`: نتيجة/وقت/إصدار schema/حجم/checksum/وجهة منقحة؛ لا يخزن مفاتيح أو كلمات مرور.
 - `import_batches`, `import_rows`: مصدر/checksum، مراجع الصفوف وحالتها/أخطاء التحقق قبل الاعتماد.
 - `schema_migrations`: version/checksum/time.
