@@ -326,8 +326,8 @@ pub fn issue_license(
         ]),
         plan_code: Some(options.plan.code().to_string()),
     };
-    let canonical = naseej_license_format::canonical_payload(&payload)
-        .map_err(|error| error.to_string())?;
+    let canonical =
+        naseej_license_format::canonical_payload(&payload).map_err(|error| error.to_string())?;
     let signature = signing_key.sign(&canonical);
     let envelope = SignedLicense {
         payload: payload.clone(),
