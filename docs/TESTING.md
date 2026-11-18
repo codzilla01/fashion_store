@@ -25,7 +25,7 @@
 
 ### لماذا `cargo fmt` لا يُفشل البناء
 
-ال的风格 مطبّق تلقائيًا: job باسم `Apply rustfmt` يشغّل `cargo fmt` على كل
+الأسلوب مطبّق تلقائيًا: job باسم `Apply rustfmt` يشغّل `cargo fmt` على كل
 crate ثم يدفع النتيجة. هذا يمنع أن يتعطل البناء بسبب مسافة بادئة، ويبقي
 الفرق على الشيفرة فقط.
 
@@ -65,15 +65,18 @@ gh api repos/codzilla01/fashion_store/commits/<sha>/comments --jq '.[].body'
 
 | الاختبار | ما يثبته |
 |---|---|
-| `sqlcipher_is_active_and_rejects_a_wrong_key` | `PRAGMA cipher_version` غير فارغ، والفتح بمفتاح خاطئ **يفشل** |
-| `dpapi_protects_the_database_key_per_windows_user` | المفتاح محمي بـDPAPI ولا يُقرأ كمادة صريحة |
-| `personal_fields_are_encrypted_at_rest` | حقول العملاء الشخصية (الاسم/الهاتف/البريد) مشفّرة في قاعدة البيانات |
-| `backup_round_trip_restores_the_database` | إنشاء `.bkz` واستعادته يعيد البيانات سليمة |
-| `backup_rejects_a_wrong_password` | كلمة مرور خاطئة **مرفوضة** ولا تُعدّل البيانات الحية |
-| `migrations_are_reopenable` | فتح/إغلاق/إعادة فتح القاعدة يعمل، والمهاجرات قابلة للتكرار |
+| `opens_an_encrypted_database_and_reports_sqlcipher` | `PRAGMA cipher_version` غير فارغ، والملف على القرص ليس SQLite صريحًا، ووضع "أمان الذاكرة" في SQLCipher معطّل |
+| `refuses_to_open_the_database_without_the_protected_key` | الفتح بمفتاح خاطئ **مرفوض** في عملية ابنة معزولة، والمفتاح الصحيح يقرأ المخطط |
+| `rejects_a_database_that_belongs_to_another_installation` | قاعدة من تثبيت آخر مرفوضة **قبل** أن يرى SQLCipher مفتاحًا لا يطابقها |
+| `dpapi_protects_and_unprotects_the_database_key` | المفتاح محمي بـDPAPI ولا يُقرأ كمادة صريحة |
+| `personal_fields_round_trip_through_the_derived_key` | حقول العملاء الشخصية (الاسم/الهاتف/البريد) مشفّرة في قاعدة البيانات |
+| `creates_and_restores_an_encrypted_backup` | إنشاء `.bkz` واستعادته يعيد البيانات سليمة، وكلمة المرور الخاطئة **مرفوضة** |
+| `migrations_are_applied_once_and_are_idempotent_on_reopen` | فتح/إغلاق/إعادة فتح القاعدة يعمل، والمهاجرات قابلة للتكرار |
 
 > هذه هي **البوابة الوحيدة** التي تُثبت أن SQLCipher وDPAPI يعملان فعليًا.
 > لا يمكن استنساخها خارج Windows.
+>
+> ملاحظة: `PRAGMA cipher_memory_security` في SQLCipher مفتاح **على مستوى العملية وغير قابل للتراجع**، ووضع "أمان الذاكرة" المعزّز في النسخة المضمّنة يُنهي العملية بـstack overflow. لذلك لا يُستخدم إطلاقًا، والاختبار `opens_an_encrypted_database_and_reports_sqlcipher` يثبت أنه معطّل.
 
 ---
 
