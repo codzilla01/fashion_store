@@ -699,6 +699,8 @@ pub fn owner_panel_begin_registration(
 #[serde(rename_all = "camelCase")]
 pub struct RegistrationInput {
     pub challenge_id: String,
+    /// The session of the panel that started the ceremony.
+    pub owner_token: String,
     pub credential_id: String,
     pub attestation_object: String,
     pub client_data_json: String,
@@ -711,8 +713,9 @@ pub fn owner_panel_finish_registration(
     state: tauri::State<'_, AppState>,
     input: RegistrationInput,
 ) -> Result<OwnerCredential, String> {
-    let session =
-        require_owner_session(&state, &input_challenge_owner(&state, &input.challenge_id)?)?;
+    // The ceremony only counts when the panel is unlocked, and the pending
+    // ceremony has to belong to the owner of that session.
+    let session = require_owner_session(&state, &input.owner_token)?;
     let attestation_object = decode(&input.attestation_object)?;
     let client_data_json = decode(&input.client_data_json)?;
     let credential_id = decode(&input.credential_id)?;
@@ -720,17 +723,26 @@ pub fn owner_panel_finish_registration(
     let expected_challenge = {
         let db = state.db.lock().map_err(|_| "DB_LOCK_FAILED".to_string())?;
         db.query_row(
-            "SELECT challenge, rp_id FROM owner_panel_challenges
+            "SELECT owner_user_id, challenge, rp_id FROM owner_panel_challenges
              WHERE challenge_id=?1 AND purpose='register' AND consumed_at IS NULL",
             params![input.challenge_id],
-            |row| Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Vec<u8>>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
         )
         .optional()
         .map_err(crate::commands::db_error)?
     };
-    let Some((expected_challenge, rp_id)) = expected_challenge else {
+    let Some((challenge_owner, expected_challenge, rp_id)) = expected_challenge else {
         return Err("OWNER_CHALLENGE_INVALID".to_string());
     };
+    if challenge_owner != session.user_id {
+        return Err("OWNER_CHALLENGE_INVALID".to_string());
+    }
     let client_data: webauthn::ClientData = serde_json::from_slice(&client_data_json)
         .map_err(|_| "OWNER_CLIENT_DATA_INVALID".to_string())?;
     webauthn::verify_client_data(
@@ -816,19 +828,6 @@ pub fn owner_panel_finish_registration(
         revoked_at: None,
         credential_id: encode(&credential_id),
     })
-}
-
-/// The owner a pending ceremony belongs to.
-fn input_challenge_owner(state: &AppState, challenge_id: &str) -> Result<String, String> {
-    let db = state.db.lock().map_err(|_| "DB_LOCK_FAILED".to_string())?;
-    db.query_row(
-        "SELECT owner_user_id FROM owner_panel_challenges WHERE challenge_id=?1",
-        params![challenge_id],
-        |row| row.get::<_, String>(0),
-    )
-    .optional()
-    .map_err(crate::commands::db_error)?
-    .ok_or_else(|| "OWNER_CHALLENGE_INVALID".to_string())
 }
 
 /// Read the authenticator data out of an attestation object.

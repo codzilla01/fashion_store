@@ -399,6 +399,7 @@ export default function OwnerPanel({ lang, onClose }: { lang: Lang; onClose: () 
       await invoke('owner_panel_finish_registration', {
         input: {
           challengeId: challenge.challengeId,
+          ownerToken,
           credentialId: registration.credentialId,
           attestationObject: registration.attestationObject,
           clientDataJson: registration.clientDataJson,
