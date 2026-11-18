@@ -223,9 +223,8 @@ pub fn render_text(receipt: &ReceiptData, width: usize) -> String {
         let quantity = format!("  {:>3} x", line.quantity);
         let unit_part = format!(" {unit}");
         let total_part = format!(" {total}");
-        let together = quantity.chars().count()
-            + unit_part.chars().count()
-            + total_part.chars().count();
+        let together =
+            quantity.chars().count() + unit_part.chars().count() + total_part.chars().count();
         if together <= width {
             let unit_width = width - quantity.chars().count() - total_part.chars().count();
             out.push_str(&format!(
