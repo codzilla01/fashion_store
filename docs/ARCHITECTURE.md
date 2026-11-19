@@ -14,6 +14,9 @@ flowchart LR
   ACT[ActivationTool.exe مستقل] --> LIC[التحقق بالمفتاح العام + ملفات req/lic]
   POS[POS.exe] --> LIC
   ISSUER[أداة إصدار داخلية] -->|توقيع Ed25519 بالمفتاح الخاص| LIC
+  SUPER[لوحة Super Admin<br/>خزنة المفتاح + سجل الاشتراكات] -->|توقيع Ed25519 بالمفتاح الخاص| LIC
+  OWNER[لوحة المالك<br/>ضغط مطول على الشعار] --> APP
+  BIOMETRIC[Windows Hello / بصمة الجهاز<br/>WebAuthn] --> OWNER
 ```
 
 لا يوجد backend شبكي. كل قراءة وكتابة تشغيلية تتم في العملية المحلية على جهاز المحل. يُستعمل الاتصال بالشبكة فقط إذا اختار المالك خدمة خارجية اختيارية لاحقًا، ولا يدخل ذلك في مسار البيع أو التفعيل الأوفلاين.
@@ -28,6 +31,13 @@ flowchart LR
 - عملية البيع تبدأ `BEGIN IMMEDIATE`، تتحقق من الأرصدة والصلاحيات والدفعات، ثم تحفظ الفاتورة والبنود والمدفوعات وحركات المخزون وسجل التدقيق في معاملة واحدة. أي فشل قبل `COMMIT` يلغي العملية كلها.
 - ترقيم الفاتورة داخل جدول sequence في المعاملة. مفتاح idempotency فريد يمنع إنشاء فاتورتين بسبب تكرار النقر/IPC.
 - الطباعة بعد نجاح الحفظ لا داخل المعاملة. فشل الطابعة لا يلغي البيع؛ يُسجل job بحالة `PENDING/FAILED` ويُتاح إعادة الطباعة دون إعادة خصم المخزون.
+
+### 1.1) لوحة تحكم المالك داخل `apps/pos-desktop`
+
+- جزء من تطبيق العميل، لكنها **سطح منفصل**: تُفتح بالضغط المطول على الشعار، ولها جلسة خاصة (`owner_sessions`) لا تختلط بجلسات البيع.
+- الأوامر: `owner_panel_status`, `owner_panel_unlock_with_password`, `owner_panel_begin_assertion`, `owner_panel_finish_assertion`, `owner_panel_begin_registration`, `owner_panel_finish_registration`, `owner_panel_credentials`, `owner_panel_revoke_credential`, `owner_panel_overview`, `owner_panel_set_return_policy`, `owner_panel_set_tax`, `owner_panel_lock`.
+- التحقق من بصمة الجهاز يتم في Rust: مراسم WebAuthn تُقرأ من `src/webauthn.rs`، والمستند CBOR يُقرأ بقارئ صغير في `src/cbor.rs`، والتوقيع يُتحقق من ES256 مقابل المفتاح العام المخزَّن في `owner_panel_credentials`.
+- ما يضبطه المالك من اللوحة هو نفسه ما يطبّقه مكتب المرتجعات: `returns_policy` في `system_settings`، والضريبة في `branches`.
 
 ### 2) قاعدة البيانات والـ ORM
 

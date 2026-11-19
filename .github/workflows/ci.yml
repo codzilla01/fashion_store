@@ -25,6 +25,7 @@ jobs:
           cache-dependency-path: |
             apps/pos-desktop/package-lock.json
             apps/activation-tool/package-lock.json
+            apps/super-admin/package-lock.json
 
       - name: Install POS desktop dependencies
         working-directory: apps/pos-desktop
@@ -40,6 +41,14 @@ jobs:
 
       - name: Build activation tool frontend
         working-directory: apps/activation-tool
+        run: npm run build
+
+      - name: Install super admin dependencies
+        working-directory: apps/super-admin
+        run: npm ci
+
+      - name: Build super admin frontend
+        working-directory: apps/super-admin
         run: npm run build
 
   schema-tests:
@@ -76,9 +85,11 @@ jobs:
         with:
           workspaces: |
             crates/license-format
+            crates/license-registry
             tools/license-issuer
             apps/pos-desktop/src-tauri
             apps/activation-tool/src-tauri
+            apps/super-admin/src-tauri
 
       - name: Install Linux Tauri system dependencies
         if: matrix.target == 'ubuntu-latest'
@@ -114,9 +125,10 @@ jobs:
 
       - name: Create placeholder frontend dist for Tauri codegen
         run: |
-          mkdir -p apps/pos-desktop/dist apps/activation-tool/dist
+          mkdir -p apps/pos-desktop/dist apps/activation-tool/dist apps/super-admin/dist
           echo '<!doctype html><title>placeholder</title>' > apps/pos-desktop/dist/index.html
           echo '<!doctype html><title>placeholder</title>' > apps/activation-tool/dist/index.html
+          echo '<!doctype html><title>placeholder</title>' > apps/super-admin/dist/index.html
 
       - name: Check formatting
         working-directory: crates/license-format
@@ -146,13 +158,78 @@ jobs:
         continue-on-error: true
         run: cargo fmt --check
 
+      - name: Check formatting (license registry)
+        working-directory: crates/license-registry
+        continue-on-error: true
+        run: cargo fmt --check
+
+      - name: Check formatting (super admin)
+        working-directory: apps/super-admin/src-tauri
+        continue-on-error: true
+        run: cargo fmt --check
+
       - name: Test license format crate
         working-directory: crates/license-format
-        run: cargo test --color never --all-features
+        run: |
+          set +e
+          cargo test --color never --all-features > /tmp/test-license-format.log 2>&1
+          status=$?
+          cat /tmp/test-license-format.log
+          exit $status
 
       - name: Test license issuer
         working-directory: tools/license-issuer
-        run: cargo test --color never --all-features
+        run: |
+          set +e
+          cargo test --color never --all-features > /tmp/test-issuer.log 2>&1
+          status=$?
+          cat /tmp/test-issuer.log
+          exit $status
+
+      - name: Test license registry
+        working-directory: crates/license-registry
+        run: |
+          set +e
+          cargo test --color never --all-features > /tmp/test-registry.log 2>&1
+          status=$?
+          cat /tmp/test-registry.log
+          exit $status
+
+      - name: Check super admin crate
+        working-directory: apps/super-admin/src-tauri
+        run: |
+          set +e
+          cargo check --color never --all-targets > /tmp/super.log 2>&1
+          status=$?
+          cat /tmp/super.log
+          if [ $status -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Test the owner panel ceremony code
+        working-directory: apps/pos-desktop/src-tauri
+        env:
+          NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
+        run: |
+          set +e
+          # Git Bash puts its own MSYS perl first on PATH, and that perl
+          # cannot build the vendored OpenSSL. Prepend Strawberry perl here.
+          if [ -d "/c/Strawberry/perl/bin" ]; then export PATH="/c/Strawberry/perl/bin:$PATH"; fi
+          cargo test --color never --lib > /tmp/poslib.log 2>&1
+          status=$?
+          cat /tmp/poslib.log
+          if [ $status -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Test the developer dashboard vault
+        working-directory: apps/super-admin/src-tauri
+        run: |
+          set +e
+          cargo test --color never --all-features > /tmp/test-super.log 2>&1
+          status=$?
+          cat /tmp/test-super.log
+          exit $status
 
       - name: Check activation tool crate
         working-directory: apps/activation-tool/src-tauri
@@ -203,6 +280,24 @@ jobs:
           cat /tmp/clippy-issuer.log
           exit $status
 
+      - name: Clippy (license registry)
+        working-directory: crates/license-registry
+        run: |
+          set +e
+          cargo clippy --color never --all-targets -- -D warnings > /tmp/clippy-license-registry.log 2>&1
+          status=$?
+          cat /tmp/clippy-license-registry.log
+          exit $status
+
+      - name: Clippy (super admin)
+        working-directory: apps/super-admin/src-tauri
+        run: |
+          set +e
+          cargo clippy --color never --all-targets -- -D warnings > /tmp/clippy-super-admin.log 2>&1
+          status=$?
+          cat /tmp/clippy-super-admin.log
+          exit $status
+
       - name: Clippy (POS)
         working-directory: apps/pos-desktop/src-tauri
         env:
@@ -221,7 +316,7 @@ jobs:
             echo "### Build diagnostics — ${{ matrix.target }}"
             echo
             echo '```'
-            for f in /tmp/pos.log /tmp/act.log /tmp/win.log /tmp/bundle.log /tmp/clippy-license-format.log /tmp/clippy-issuer.log /tmp/clippy-pos.log; do
+            for f in /tmp/pos.log /tmp/act.log /tmp/super.log /tmp/poslib.log /tmp/win.log /tmp/bundle.log /tmp/test-license-format.log /tmp/test-issuer.log /tmp/test-registry.log /tmp/test-super.log /tmp/clippy-license-format.log /tmp/clippy-license-registry.log /tmp/clippy-issuer.log /tmp/clippy-super-admin.log /tmp/clippy-pos.log; do
               if [ -f "$f" ]; then
                 echo "#### $f"
                 echo "#### errors:"
@@ -435,7 +530,7 @@ jobs:
 
       - name: Run rustfmt on every crate
         run: |
-          for crate in crates/license-format tools/license-issuer apps/pos-desktop/src-tauri apps/activation-tool/src-tauri; do
+          for crate in crates/license-format crates/license-registry tools/license-issuer apps/pos-desktop/src-tauri apps/activation-tool/src-tauri apps/super-admin/src-tauri; do
             echo "--- formatting $crate"
             (cd "$crate" && cargo fmt)
           done

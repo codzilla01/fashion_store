@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import OwnerPanel from './OwnerPanel';
+import type { Lang } from './lang';
 
-type Lang = 'ar' | 'en';
+/** The two colour themes. The dark theme swaps the CSS custom properties. */
+type Theme = 'light' | 'dark';
+
+const THEME_KEY = 'naseej-pos-theme';
 type CategoryKey = 'all' | 'shirts' | 'trousers' | 'dresses' | 'jackets' | 'basics';
 type PayMethod = 'CASH' | 'CARD' | 'WALLET';
 
@@ -58,6 +63,7 @@ type UserOption = { id: string; username: string; displayName: string; roleCode:
 type BranchOption = { id: string; code: string; nameAr: string; nameEn: string };
 type BackupHistoryRow = { id: string; status: string; backupKind: string; filename: string | null; byteSize: number | null; startedAt: string; finishedAt: string | null };
 type BackupOperationResult = { status: string; path: string; byteSize: number };
+type ReturnPolicy = { periodDays: number; allowDiscountedItems: boolean; restockConditions: string[] };
 type ReturnableInvoiceLine = { invoiceLineId: string; variantId: string; sku: string; productNameAr: string; productNameEn: string; size: string; color: string; quantity: number; returnedQuantity: number; remainingQuantity: number; lineTotalMinor: number };
 type ReturnableInvoice = { invoiceId: string; invoiceNo: string; status: string; createdAt: string; lines: ReturnableInvoiceLine[] };
 type ReturnSelection = { selected: boolean; quantity: string; itemCondition: string; disposition: string };
@@ -202,6 +208,8 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     bell: 'M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9m-8 12h4',
     chevronDown: 'm6 9 6 6 6-6',
     warning: 'M12 3 1.5 21h21L12 3Zm0 6v6m0 3v.01',
+    sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM12 1v2m0 18v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2m18 0h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
+    moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z',
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name] ?? paths.grid} /></svg>;
 }
@@ -240,6 +248,54 @@ function mapNativeCatalog(rows: NativeCatalogItem[]): Product[] {
       }),
     };
   });
+}
+
+/**
+ * Open the owner panel with a long press on the application logo.
+ *
+ * A long press is a deliberate gesture, so the panel is out of the way of
+ * the cashier but still reachable without a menu to hunt through.
+ */
+function useLongPress(onLongPress: () => void, delayMs = 1200) {
+  const timer = useRef<number | null>(null);
+  const holding = useRef(false);
+  const [isHolding, setIsHolding] = useState(false);
+
+  const clear = useCallback(() => {
+    if (timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+    if (holding.current) {
+      holding.current = false;
+      setIsHolding(false);
+    }
+  }, []);
+
+  const begin = useCallback(() => {
+    holding.current = true;
+    setIsHolding(true);
+    if (timer.current !== null) window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      holding.current = false;
+      setIsHolding(false);
+      onLongPress();
+    }, delayMs);
+  }, [delayMs, onLongPress]);
+
+  useEffect(() => clear, [clear]);
+
+  return {
+    isHolding,
+    handlers: {
+      onPointerDown: begin,
+      onPointerUp: clear,
+      onPointerLeave: clear,
+      onPointerCancel: clear,
+      onContextMenu: (event: React.MouseEvent) => event.preventDefault(),
+    },
+  };
 }
 
 function App() {
@@ -292,6 +348,7 @@ function App() {
   const [backupForm, setBackupForm] = useState({ destinationPath: '', password: '', destinationKind: 'LOCAL' });
   const [restoreForm, setRestoreForm] = useState({ sourcePath: '', password: '' });
   const [returnInvoiceNo, setReturnInvoiceNo] = useState('');
+  const [returnPolicy, setReturnPolicy] = useState<ReturnPolicy | null>(null);
   const [returnableInvoice, setReturnableInvoice] = useState<ReturnableInvoice | null>(null);
   const [returnSelections, setReturnSelections] = useState<Record<string, ReturnSelection>>({});
   const [returnReason, setReturnReason] = useState('');
@@ -304,16 +361,37 @@ function App() {
   const [taxRateBps, setTaxRateBps] = useState(1400);
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
   const [licenseError, setLicenseError] = useState('');
-  const [pricesIncludeTax, setPricesIncludeTax] = useState(true);
+  const [pricesIncludeTax, setPricesIncludeTax] = useState(false);
   const [authForm, setAuthForm] = useState({ username: '', displayName: '', password: '' });
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [taxRateInput, setTaxRateInput] = useState('14');
-  const [taxInclusiveInput, setTaxInclusiveInput] = useState(true);
+  const [ownerPanelOpen, setOwnerPanelOpen] = useState(false);
+  const [taxInclusiveInput, setTaxInclusiveInput] = useState(false);
   const returnOperationRef = useRef<{ payload: string; key: string }>({ payload: '', key: '' });
   const searchRef = useRef<HTMLInputElement>(null);
   const t = words[lang];
   const dir = lang === 'ar' ? 'rtl' : 'ltr';
+
+  // The theme is a device preference, not a store setting: it is stored in the
+  // browser profile so it survives restarts without touching the database.
+  const [theme, setTheme] = useState<Theme>(() => {
+    const stored = localStorage.getItem(THEME_KEY);
+    if (stored === 'light' || stored === 'dark') return stored;
+    return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem(THEME_KEY, theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme((current) => (current === 'dark' ? 'light' : 'dark'));
+
+  // The owner panel opens with a long press on the logo, in the sign in
+  // screen and in the working screen alike.
+  const openOwnerPanel = useCallback(() => setOwnerPanelOpen(true), []);
+  const logoPress = useLongPress(openOwnerPanel);
 
   useEffect(() => {
     const native = Boolean((window as Window & { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__);
@@ -485,9 +563,13 @@ function App() {
       } else if (tab === 'users') {
         setUsers(await invoke<UserOption[]>('list_users', { sessionToken }));
       } else if (tab === 'returns') {
-        const rows = await invoke<NativeCatalogItem[]>('get_catalog', { sessionToken });
+        const [rows, policy] = await Promise.all([
+          invoke<NativeCatalogItem[]>('get_catalog', { sessionToken }),
+          invoke<ReturnPolicy>('get_return_policy', { sessionToken }),
+        ]);
         const mapped = mapNativeCatalog(rows);
         setCatalogItems(mapped);
+        setReturnPolicy(policy);
         const firstVariant = mapped.flatMap((product) => product.variants).find((variant) => variant.stock > 0);
         setExchangeVariantId((current) => current || firstVariant?.id || '');
       } else if (tab === 'branches') {
@@ -1056,8 +1138,9 @@ function App() {
     const taxSetup = gate === 'tax';
     const setup = gate === 'setup';
     return (
+      <>
       <div className="auth-shell" dir={dir}>
-        <div className="auth-brand"><div className="auth-logo">ن</div><div><strong>نسيج</strong><span>{lang === 'ar' ? 'نظام نقاط البيع' : 'Point of sale'}</span></div></div>
+        <div className="auth-brand"><div className={`auth-logo ${logoPress.isHolding ? 'holding' : ''}`} title={lang === 'ar' ? 'اضغط مطولًا للوحة المالك' : 'Long press for the owner panel'} {...logoPress.handlers}>ن</div><div><strong>نسيج</strong><span>{lang === 'ar' ? 'نظام نقاط البيع' : 'Point of sale'}</span></div></div>
         <section className="auth-card">
           <div className="auth-card-mark">{licenseGate || taxSetup ? <Icon name="tag" size={22} /> : <Icon name={checking ? 'clock' : 'user'} size={22} />}</div>
           <div className="auth-eyebrow">{lang === 'ar' ? 'تشغيل محلي آمن' : 'Secure local setup'}</div>
@@ -1086,15 +1169,20 @@ function App() {
           </form>}
           <div className="auth-foot"><span className="status-dot" />{lang === 'ar' ? 'البيانات محفوظة محليًا ومشفّرة' : 'Data is encrypted and stored locally'}</div>
         </section>
-        <button className="auth-language" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}>{lang === 'ar' ? 'English' : 'العربية'}</button>
+        <div className="auth-top-actions">
+          <button className="auth-language" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}>{lang === 'ar' ? 'English' : 'العربية'}</button>
+          <button className="auth-theme-button" onClick={toggleTheme} aria-label={lang === 'ar' ? 'تبديل النمط' : 'Toggle theme'}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} /></button>
+        </div>
       </div>
+      {ownerPanelOpen && <OwnerPanel lang={lang} onClose={() => setOwnerPanelOpen(false)} />}
+      </>
     );
   }
 
   return (
     <div className="app-shell" dir={dir}>
       <aside className="side-rail">
-        <div className="brand-mark" title="نسيج POS"><span>ن</span><i /></div>
+        <div className={`brand-mark ${logoPress.isHolding ? 'holding' : ''}`} title={lang === 'ar' ? 'نسيج POS — اضغط مطولًا للوحة المالك' : 'Naseej POS — long press for the owner panel'} {...logoPress.handlers}><span>ن</span><i /></div>
         <div className="rail-divider" />
           <button className={`rail-button ${activeTab === 'sale' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('sale')} aria-label={t.sale} title={t.sale}><Icon name="bag" /></button>
           <button className={`rail-button ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('inventory')} aria-label={t.inventory} title={t.inventory}><Icon name="box" /></button>
@@ -1113,12 +1201,13 @@ function App() {
 
       <main className="main-area">
         <header className="topbar">
-          <div className="store-name"><div className="store-icon"><span>ن</span></div><div><strong>نسيج</strong><small>{lang === 'ar' ? 'متجر الملابس' : 'Apparel store'}</small></div></div>
+          <div className="store-name"><div className={`store-icon ${logoPress.isHolding ? 'holding' : ''}`} title={lang === 'ar' ? 'اضغط مطولًا للوحة المالك' : 'Long press for the owner panel'} {...logoPress.handlers}><span>ن</span></div><div><strong>نسيج</strong><small>{lang === 'ar' ? 'متجر الملابس' : 'Apparel store'}</small></div></div>
           <div className="topbar-center"><span className="breadcrumb-muted">{lang === 'ar' ? 'نسيج' : 'Naseej'}</span><Icon name="chevron" size={14} /><strong>{t[activeTab]}</strong></div>
           <div className="topbar-actions">
             <div className="status-chip"><span className="status-dot" />{lang === 'ar' ? 'يعمل دون اتصال' : 'Offline ready'}</div>
             {branches.length > 0 && <select className="branch-switcher" value={activeBranchId} onChange={(event) => void changeBranch(event.target.value)} aria-label={lang === 'ar' ? 'الفرع النشط' : 'Active branch'}>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {lang === 'ar' ? branch.nameAr : branch.nameEn}</option>)}</select>}
             <button className="language-button" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} aria-label="Change language">{lang === 'ar' ? 'EN' : 'عربي'}<Icon name="chevronDown" size={13} /></button>
+            <button className="language-button theme-button" onClick={toggleTheme} aria-label={lang === 'ar' ? 'تبديل النمط الليلي والنهاري' : 'Toggle dark and light theme'} title={lang === 'ar' ? 'النمط' : 'Theme'}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} /></button>
             <div className="cashier-info"><div className="avatar">{(desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')).slice(0, 1)}</div><div className="cashier-copy"><strong>{desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')}</strong><small>{t.cashier} · {t.shift}</small></div><Icon name="chevronDown" size={14} /></div>
           </div>
         </header>
@@ -1286,6 +1375,7 @@ function App() {
               <section className="module-card"><div className="module-card-head"><div><span className="modal-eyebrow">{backupHistory.length} {lang === 'ar' ? 'عمليات حديثة' : 'recent operations'}</span><h2>{lang === 'ar' ? 'سجل النسخ والاستعادة' : 'Backup history'}</h2></div><button className="filter-button" onClick={() => void openWorkspaceTab('backup')}>{lang === 'ar' ? 'تحديث' : 'Refresh'}<Icon name="clock" size={15} /></button></div><div className="module-product-list">{backupHistory.map((row) => <div className="module-product-row" key={row.id}><div className={`stat-icon ${row.status === 'FAILED' ? 'peach' : 'mint'}`}><Icon name={row.status === 'FAILED' ? 'close' : 'backup'} size={16} /></div><div><strong>{row.filename ?? row.backupKind} · {row.status}</strong><small>{row.backupKind} · {new Date(row.startedAt).toLocaleString(lang === 'ar' ? 'ar-EG' : 'en-GB')}{row.byteSize ? ` · ${(row.byteSize / 1024 / 1024).toFixed(1)} MB` : ''}</small></div></div>)}{backupHistory.length === 0 && <div className="empty-table">{lang === 'ar' ? 'لا توجد عمليات مسجلة بعد.' : 'No backup operations recorded yet.'}</div>}</div></section>
             </div>}
             {activeTab === 'returns' && <>
+              {returnPolicy && <div className="policy-strip"><span className="policy-strip-label">{lang === 'ar' ? 'سياسة المرتجعات' : 'Return policy'}</span><span>{lang === 'ar' ? `مدة الاسترجاع ${returnPolicy.periodDays} يومًا` : `${returnPolicy.periodDays} day return window`}</span><span>{returnPolicy.allowDiscountedItems ? (lang === 'ar' ? 'الأصناف المخفّضة قابلة للإرجاع' : 'discounted items may be returned') : (lang === 'ar' ? 'الأصناف المخفّضة غير قابلة للإرجاع' : 'discounted items are refused')}</span><span>{lang === 'ar' ? `الإرجاع للمخزون: ${returnPolicy.restockConditions.map((condition) => condition === 'UNOPENED' ? 'غير مفتوحة' : 'بالبطاقة').join('، ')}` : `Restock: ${returnPolicy.restockConditions.join(', ')}`}</span></div>}
               <div className="module-grid returns-grid">
                 <form className="module-card module-form" onSubmit={findReturnInvoice}><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'إرجاع جزئي' : 'Partial returns'}</span><h2>{lang === 'ar' ? 'العثور على الفاتورة الأصلية' : 'Find original invoice'}</h2></div><div className="stat-icon peach"><Icon name="return" /></div></div><label>{lang === 'ar' ? 'رقم الفاتورة' : 'Invoice number'}<input value={returnInvoiceNo} onChange={(event) => setReturnInvoiceNo(event.target.value)} placeholder="NS-YYYYMMDD-0001" required /></label><button className="auth-submit" type="submit" disabled={workspaceBusy}>{lang === 'ar' ? 'تحميل البنود القابلة للإرجاع' : 'Load returnable lines'}<Icon name="search" size={16} /></button>{returnableInvoice && <div className="auth-helper">{lang === 'ar' ? `الفاتورة ${returnableInvoice.invoiceNo} · ${returnableInvoice.status} · ${new Date(returnableInvoice.createdAt).toLocaleDateString('ar-EG')}` : `Invoice ${returnableInvoice.invoiceNo} · ${returnableInvoice.status} · ${new Date(returnableInvoice.createdAt).toLocaleDateString('en-GB')}`}</div>}</form>
                 <section className="module-card return-lines-card"><div className="module-card-head"><div><span className="modal-eyebrow">{selectedReturnLines.length} {lang === 'ar' ? 'بنود مختارة' : 'selected lines'}</span><h2>{lang === 'ar' ? 'البنود وحالة القطعة' : 'Items and condition'}</h2></div></div>{!returnableInvoice ? <div className="empty-table">{lang === 'ar' ? 'ابحث عن فاتورة لعرض البنود.' : 'Search for an invoice to load its lines.'}</div> : <div className="return-line-list">{returnableInvoice.lines.map((line) => {
@@ -1319,6 +1409,7 @@ function App() {
 
       {notice && <div className={`toast ${notice.kind}`} role="status"><span className="toast-symbol">{notice.kind === 'success' ? <Icon name="check" size={17} /> : '!'}</span><span>{notice.text}</span><button onClick={() => setNotice(null)} aria-label="إغلاق"><Icon name="close" size={14} /></button></div>}
       {!isTauri && <div className="preview-ribbon"><span className="preview-spark">✦</span>{t.preview}</div>}
+      {ownerPanelOpen && <OwnerPanel lang={lang} onClose={() => setOwnerPanelOpen(false)} />}
     </div>
   );
 }

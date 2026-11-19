@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Naseej Developer Dashboard",
+  "version": "0.1.0",
+  "identifier": "com.naseej.superadmin",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1424",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [{ "label": "main", "title": "لوحة نسيج الإدارية", "width": 1120, "height": 820, "minWidth": 880, "minHeight": 640, "center": true, "resizable": true }],
+    "security": { "csp": "default-src 'self'; img-src 'self' data: asset:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src ipc: http://ipc.localhost" }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "shortDescription": "Internal subscription and activation dashboard",
+    "longDescription": "Internal developer dashboard for Naseej: holds the signing vault, issues customer subscriptions and keeps the registry of issued licences.",
+    "category": "Business",
+    "windows": { "nsis": { "displayLanguageSelector": false, "languages": ["English", "Arabic"] } }
+  }
+}
