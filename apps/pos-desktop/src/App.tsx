@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import OwnerPanel from './OwnerPanel';
+import StoreDashboard, { type ManagerSection } from './StoreDashboard';
 import type { Lang } from './lang';
 
 /** The two colour themes. The dark theme swaps the CSS custom properties. */
@@ -50,7 +51,8 @@ type AuthResult = { sessionToken: string; displayName: string; branchId: string 
 type AppStatus = { needsOwnerSetup: boolean; taxConfigurationRequired: boolean; taxRateBps: number; pricesIncludeTax: boolean | null };
 type LicenseStatus = { valid: boolean; statusCode: string; deviceFingerprint: string | null; licenseId: string | null; customerId: string | null; planCode: string | null; expiresAtUtc: string | null; features: string[]; limits: Record<string, number>; publicKeyConfigured: boolean; localTrial: boolean; gracePeriod: boolean; graceExpiresAtUtc: string | null; productionBuild: boolean };
 type ActivationRequest = { schema_version: number; request_id: string; product: string; app_version: string; requested_at_utc: string; device_fingerprint: string };
-type WorkspaceTab = 'sale' | 'inventory' | 'products' | 'purchases' | 'reports' | 'users' | 'branches' | 'backup' | 'returns';
+type WorkspaceTab = 'manager' | 'sale' | 'inventory' | 'products' | 'purchases' | 'reports' | 'users' | 'branches' | 'backup' | 'returns';
+type PosTarget = 'sale' | 'products' | 'users' | 'reports' | 'branches' | 'backup';
 type SetupOption = { id: string; code: string | null; nameAr: string; nameEn: string; colorHex: string | null; profileCode: string | null };
 type CatalogSetupOptions = { categories: SetupOption[]; brands: SetupOption[]; seasons: SetupOption[]; sizes: SetupOption[]; colors: SetupOption[] };
 type NativeInventoryRow = { variantId: string; sku: string; barcode: string | null; productNameAr: string; productNameEn: string; sizeCode: string; colorAr: string; colorEn: string; priceMinor: number; sellable: number; damaged: number; reorderLevel: number; needsReorder: boolean };
@@ -210,6 +212,16 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     warning: 'M12 3 1.5 21h21L12 3Zm0 6v6m0 3v.01',
     sun: 'M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10ZM12 1v2m0 18v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2m18 0h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4',
     moon: 'M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z',
+    hanger: 'M12 3.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5Zm-.8 6h1.6v1.2L21 16.3c.9.6.4 1.9-.6 1.9H3.6C2.6 18.2 2.1 16.9 3 16.3l8.2-5.6V9.5Z',
+    home: 'm3 11 9-8 9 8v8a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1v-8Z',
+    inbox: 'M4 5h16v14H4zM4 13h5l1 2h4l1-2h5',
+    archive: 'M4 5h16v4H4zM5 9v10h14V9M10 13h4',
+    activity: 'M3 12h4l3-7 4 14 3-7h4',
+    settings: 'M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Zm0-9.7 1-2 2 .9.3 2.1 2 1.2 2-.7 1 1.7-1.5 1.5.1 2.2 1.8 1.2-1 1.8-2.2-.2-1.5 1.6-.8 2.1-2-.2-1-1.8-2.2.2-1.5-1.6-2.1.8-1-1.8 1.7-1.2-.1-2.2L7 6l1.8-1 1.5 1.5 2.1-.3Z',
+    logout: 'M10 4H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h5M14 16l4-4-4-4M18 12H8',
+    pin: 'M12 21s7-6.3 7-11a7 7 0 1 0-14 0c0 4.7 7 11 7 11Zm0-9.2a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z',
+    ruler: 'M4 17 17 4l3 3L7 20l-3-3Zm6-4 2 2m2-6 2 2',
+    message: 'M20 15a3 3 0 0 1-3 3H9l-5 3V7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v8Z',
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name] ?? paths.grid} /></svg>;
 }
@@ -319,7 +331,8 @@ function App() {
   const [sessionToken, setSessionToken] = useState('');
   const [desktopName, setDesktopName] = useState('');
   const [catalogItems, setCatalogItems] = useState<Product[]>(products);
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>('sale');
+  const [activeTab, setActiveTab] = useState<WorkspaceTab>('manager');
+  const [managerSection, setManagerSection] = useState<ManagerSection>('overview');
   const [catalogSetup, setCatalogSetup] = useState<CatalogSetupOptions | null>(null);
   const [inventoryRows, setInventoryRows] = useState<NativeInventoryRow[]>([]);
   const [workspaceBusy, setWorkspaceBusy] = useState(false);
@@ -372,6 +385,14 @@ function App() {
   const searchRef = useRef<HTMLInputElement>(null);
   const t = words[lang];
   const dir = lang === 'ar' ? 'rtl' : 'ltr';
+  const managerLabels: Record<ManagerSection, string> = {
+    overview: lang === 'ar' ? 'نظرة عامة' : 'Overview',
+    orders: lang === 'ar' ? 'الطلبات' : 'Orders',
+    support: lang === 'ar' ? 'رسائل الدعم' : 'Support messages',
+    activity: lang === 'ar' ? 'سجل النشاط' : 'Activity log',
+  };
+  const managerMode = activeTab === 'manager';
+  const sectionTitle = managerMode ? managerLabels[managerSection] : t[activeTab];
 
   // The theme is a device preference, not a store setting: it is stored in the
   // browser profile so it survives restarts without touching the database.
@@ -527,6 +548,11 @@ function App() {
   }
 
   async function openWorkspaceTab(tab: WorkspaceTab) {
+    if (tab === 'manager') {
+      setActiveTab('manager');
+      setManagerSection('overview');
+      return;
+    }
     setActiveTab(tab);
     setWorkspaceError('');
     if (!isTauri) {
@@ -1180,36 +1206,80 @@ function App() {
   }
 
   return (
-    <div className="app-shell" dir={dir}>
-      <aside className="side-rail">
-        <div className={`brand-mark ${logoPress.isHolding ? 'holding' : ''}`} title={lang === 'ar' ? 'نسيج POS — اضغط مطولًا للوحة المالك' : 'Naseej POS — long press for the owner panel'} {...logoPress.handlers}><span>ن</span><i /></div>
-        <div className="rail-divider" />
-          <button className={`rail-button ${activeTab === 'sale' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('sale')} aria-label={t.sale} title={t.sale}><Icon name="bag" /></button>
-          <button className={`rail-button ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('inventory')} aria-label={t.inventory} title={t.inventory}><Icon name="box" /></button>
-          <button className={`rail-button ${activeTab === 'products' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('products')} aria-label={t.products} title={t.products}><Icon name="grid" /></button>
-          <button className={`rail-button ${activeTab === 'purchases' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('purchases')} aria-label={t.purchases} title={t.purchases}><Icon name="wallet" /></button>
-          <button className={`rail-button ${activeTab === 'users' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('users')} aria-label={t.users} title={t.users}><Icon name="user" /></button>
-          <button className={`rail-button ${activeTab === 'branches' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('branches')} aria-label={t.branches} title={t.branches}><Icon name="branch" /></button>
-          <button className={`rail-button ${activeTab === 'backup' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('backup')} aria-label={t.backup} title={t.backup}><Icon name="backup" /></button>
-          <button className={`rail-button ${activeTab === 'returns' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('returns')} aria-label={t.returns} title={t.returns}><Icon name="return" /></button>
-          <button className={`rail-button ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => { void openWorkspaceTab('reports'); }} aria-label={t.reports} title={t.reports}><Icon name="chart" /></button>
-        <div className="rail-bottom">
-          <button className="rail-button" aria-label="الإشعارات"><Icon name="bell" /></button>
-          <div className="avatar small-avatar">م</div>
+    <div className={`app-shell ${managerMode ? 'manager-mode' : ''}`} dir={dir}>
+      <aside className="side-rail manager-sidebar">
+        <button
+          type="button"
+          className="manager-brand"
+          title={lang === 'ar' ? 'اضغط مطولًا للوحة المالك' : 'Long press for the owner panel'}
+          {...logoPress.handlers}
+        >
+          <span className="brand-hanger"><Icon name="hanger" size={24} /></span>
+          <span className="brand-copy"><strong>Fashion Store</strong><small>STORE MANAGEMENT</small></span>
+        </button>
+
+        <div className="sidebar-scroll">
+          <button
+            type="button"
+            className={`nav-button ${managerMode && managerSection === 'overview' ? 'active' : ''}`}
+            onClick={() => { setActiveTab('manager'); setManagerSection('overview'); }}
+          ><Icon name="home" size={17} />{lang === 'ar' ? 'نظرة عامة' : 'Overview'}</button>
+          <button
+            type="button"
+            className={`nav-button ${managerMode && managerSection === 'orders' ? 'active' : ''}`}
+            onClick={() => { setActiveTab('manager'); setManagerSection('orders'); }}
+          ><Icon name="cart" size={17} />{lang === 'ar' ? 'الطلبات' : 'Orders'}<span className="nav-badge">1</span></button>
+          <button type="button" className={`nav-button ${activeTab === 'products' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('products')}><Icon name="boxes" size={17} />{lang === 'ar' ? 'المنتجات والمخزون' : 'Products & inventory'}</button>
+          <button type="button" className={`nav-button ${activeTab === 'inventory' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('inventory')}><Icon name="box" size={17} />{t.inventory}</button>
+          <button type="button" className={`nav-button ${activeTab === 'purchases' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('purchases')}><Icon name="wallet" size={17} />{t.purchases}</button>
+          <button type="button" className={`nav-button ${activeTab === 'returns' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('returns')}><Icon name="return" size={17} />{t.returns}</button>
+          <button type="button" className={`nav-button ${activeTab === 'users' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('users')}><Icon name="users" size={17} />{lang === 'ar' ? 'العملاء والحسابات' : 'Customers & accounts'}</button>
+          <button
+            type="button"
+            className={`nav-button ${managerMode && managerSection === 'support' ? 'active' : ''}`}
+            onClick={() => { setActiveTab('manager'); setManagerSection('support'); }}
+          ><Icon name="message" size={17} />{lang === 'ar' ? 'رسائل الدعم' : 'Support messages'}<span className="nav-badge">3</span></button>
+          <button type="button" className={`nav-button ${activeTab === 'products' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('products')}><Icon name="ruler" size={17} />{lang === 'ar' ? 'خيارات الحجم' : 'Size options'}</button>
+          <button type="button" className={`nav-button ${activeTab === 'reports' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('reports')}><Icon name="chart" size={17} />{t.reports}</button>
+
+          <div className="nav-divider" />
+
+          <button type="button" className={`nav-button ${activeTab === 'branches' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('branches')}><Icon name="settings" size={17} />{lang === 'ar' ? 'إدارة المتجر' : 'Store settings'}</button>
+          <button
+            type="button"
+            className={`nav-button ${managerMode && managerSection === 'activity' ? 'active' : ''}`}
+            onClick={() => { setActiveTab('manager'); setManagerSection('activity'); }}
+          ><Icon name="activity" size={17} />{lang === 'ar' ? 'سجل النشاط' : 'Activity log'}</button>
+          <button
+            type="button"
+            className={`nav-button ${managerMode && managerSection === 'support' ? 'active' : ''}`}
+            onClick={() => { setActiveTab('manager'); setManagerSection('support'); }}
+          ><Icon name="inbox" size={17} />{lang === 'ar' ? 'صندوق الرسائل المحلي' : 'Local message inbox'}</button>
+          <button type="button" className={`nav-button ${activeTab === 'backup' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('backup')}><Icon name="archive" size={17} />{t.backup}</button>
+        </div>
+
+        <div className="sidebar-bottom">
+          <div className="sidebar-tools">
+            <button type="button" className="sidebar-tool" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}>{lang === 'ar' ? 'EN' : 'ع'}</button>
+            <button type="button" className="sidebar-tool" onClick={toggleTheme} aria-label={lang === 'ar' ? 'تبديل النمط' : 'Toggle theme'}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} /></button>
+            <div className="status-chip"><span className="status-dot" />{lang === 'ar' ? 'محلي' : 'Local'}</div>
+          </div>
+          <button type="button" className="store-view-button" onClick={() => void openWorkspaceTab('sale')}><Icon name="home" size={16} />{lang === 'ar' ? 'عرض المتجر' : 'Open store'}</button>
+          <span className="sidebar-copyright">Fashion Store © 2026</span>
         </div>
       </aside>
 
       <main className="main-area">
-        <header className="topbar">
-          <div className="store-name"><div className={`store-icon ${logoPress.isHolding ? 'holding' : ''}`} title={lang === 'ar' ? 'اضغط مطولًا للوحة المالك' : 'Long press for the owner panel'} {...logoPress.handlers}><span>ن</span></div><div><strong>نسيج</strong><small>{lang === 'ar' ? 'متجر الملابس' : 'Apparel store'}</small></div></div>
-          <div className="topbar-center"><span className="breadcrumb-muted">{lang === 'ar' ? 'نسيج' : 'Naseej'}</span><Icon name="chevron" size={14} /><strong>{t[activeTab]}</strong></div>
-          <div className="topbar-actions">
-            <div className="status-chip"><span className="status-dot" />{lang === 'ar' ? 'يعمل دون اتصال' : 'Offline ready'}</div>
-            {branches.length > 0 && <select className="branch-switcher" value={activeBranchId} onChange={(event) => void changeBranch(event.target.value)} aria-label={lang === 'ar' ? 'الفرع النشط' : 'Active branch'}>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {lang === 'ar' ? branch.nameAr : branch.nameEn}</option>)}</select>}
-            <button className="language-button" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} aria-label="Change language">{lang === 'ar' ? 'EN' : 'عربي'}<Icon name="chevronDown" size={13} /></button>
-            <button className="language-button theme-button" onClick={toggleTheme} aria-label={lang === 'ar' ? 'تبديل النمط الليلي والنهاري' : 'Toggle dark and light theme'} title={lang === 'ar' ? 'النمط' : 'Theme'}><Icon name={theme === 'dark' ? 'sun' : 'moon'} size={14} /></button>
-            <div className="cashier-info"><div className="avatar">{(desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')).slice(0, 1)}</div><div className="cashier-copy"><strong>{desktopName || (lang === 'ar' ? 'مريم حسن' : 'Mariam Hassan')}</strong><small>{t.cashier} · {t.shift}</small></div><Icon name="chevronDown" size={14} /></div>
+        <header className="topbar manager-topbar">
+          <div className="manager-top-actions">
+            <button type="button" className="top-icon-button" title={lang === 'ar' ? 'تسجيل الخروج' : 'Sign out'} onClick={() => setNotice({ text: lang === 'ar' ? 'تسجيل الخروج متاح من نافذة التطبيق.' : 'Sign out is available from the app window.', kind: 'success' })}><Icon name="logout" size={17} /></button>
+            <div className="top-location"><span className="location-avatar">م</span><span>{lang === 'ar' ? 'مصر المعتمدية' : 'El Maamouria, Egypt'}</span></div>
+            <button type="button" className="top-icon-button" title={lang === 'ar' ? 'الإشعارات' : 'Notifications'}><Icon name="bell" size={17} /></button>
+            <label className="top-search"><Icon name="search" size={16} /><input placeholder={lang === 'ar' ? 'ابحث عن رقم أو اسم عميل...' : 'Search by customer name or number...'} aria-label={lang === 'ar' ? 'بحث' : 'Search'} /></label>
+            <div className="manager-top-account"><span className="account-avatar">{(desktopName || 'P').slice(0, 1)}</span><span>{desktopName || (lang === 'ar' ? 'مدير المتجر' : 'Store manager')}</span><Icon name="chevronDown" size={12} /></div>
+            {branches.length > 0 && <select className="branch-switcher manager-branch-switcher" value={activeBranchId} onChange={(event) => void changeBranch(event.target.value)} aria-label={lang === 'ar' ? 'الفرع النشط' : 'Active branch'}>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {lang === 'ar' ? branch.nameAr : branch.nameEn}</option>)}</select>}
           </div>
+          <div className="topbar-center"><span className="breadcrumb-muted">{lang === 'ar' ? 'الإدارة' : 'Management'}</span><span className="breadcrumb-sep"><Icon name="chevron" size={13} /></span><strong>{sectionTitle}</strong></div>
         </header>
 
         {licenseStatus && !licenseStatus.productionBuild && (
@@ -1249,7 +1319,13 @@ function App() {
         )}
 
         <div className="page-content">
-          {activeTab === 'sale' ? <>
+          {managerMode ? (
+            <StoreDashboard
+              section={managerSection}
+              onSectionChange={setManagerSection}
+              onNavigate={(tab: PosTarget) => void openWorkspaceTab(tab)}
+            />
+          ) : activeTab === 'sale' ? <>
           <div className="page-heading">
             <div><div className="eyebrow"><span className="live-dot" />{t.scanTip}</div><h1>{t.title}</h1><p>{t.subtitle}</p></div>
             <div className="date-block"><div className="date-icon"><Icon name="clock" size={17} /></div><div><span>{new Intl.DateTimeFormat(lang === 'ar' ? 'ar-EG' : 'en-GB', { weekday: 'long', day: 'numeric', month: 'long' }).format(new Date())}</span><strong>{new Intl.DateTimeFormat(lang === 'ar' ? 'ar-EG' : 'en-GB', { hour: '2-digit', minute: '2-digit' }).format(new Date())}</strong></div></div>
