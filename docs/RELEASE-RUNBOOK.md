@@ -70,3 +70,85 @@ Get-AuthenticodeSignature .\Naseej POS_0.1.0_x64-setup.exe
 - `apps/super-admin`
 - أي `.req` أو `.lic` أو `.bkz` خاص بمحل آخر
 - أي مفتاح خاص أو كلمة مرور
+
+---
+
+## 7. إضافة الأسرار خطوة بخطوة (دليل عملي)
+
+### 7.1 مكان الإضافة
+
+GitHub → المستودع `codzilla01/fashion_store` → **Settings** →
+**Secrets and variables** → **Actions** → زر **New repository secret**.
+
+أضف الأسرار الثلاثة بأسمائها الحرفية تمامًا (حساسة لحالة الأحرف):
+
+| الاسم | القيمة |
+|---|---|
+| `NASEEJ_LICENSE_PUBLIC_KEY_HEX` | مفتاح التحقق العام Ed25519، 64 حرفًا سداسيًا |
+| `CODE_SIGNING_PFX_BASE64` | ملف `.pfx` بترميز Base64 في سطر واحد |
+| `CODE_SIGNING_PFX_PASSWORD` | كلمة مرور الـ`.pfx` |
+
+> لا تُرسل القيم في المحادثة ولا تضعها في ملف داخل المستودع.
+> لا يطبع مسار الإصدار أي قيمة؛ يطبع فقط «configured».
+
+### 7.2 المفتاح العام للرخصة (على جهاز الإصدار المعزول)
+
+المفتاح العام **مشتق** من ملف الـseed ولا يُختار يدويًا:
+
+```powershell
+# 1) توليد seed عشوائي 32 بايت (مرة واحدة فقط لكل منتج)
+$seed = New-Object byte[] 32
+[Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($seed)
+[IO.File]::WriteAllBytes("$env:USERPROFILE\naseej-prod-seed.bin", $seed)
+
+# 2) اشتقاق المفتاح العام من نفس الملف
+cargo run --release --manifest-path tools\license-issuer\Cargo.toml -- `
+  public-key --private-key-file "$env:USERPROFILE\naseej-prod-seed.bin"
+# يطبع: NASEEJ_LICENSE_PUBLIC_KEY_HEX=<64 hex>
+```
+
+انسخ الـ64 حرفًا فقط (بدون `NASEEJ_LICENSE_PUBLIC_KEY_HEX=`) إلى السر.
+احتفظ بملف الـseed في خزنة/HSM منفصلة، وفقدانه يعني استحالة إصدار رخص
+تطابق النسخ الموزّعة.
+
+### 7.3 شهادة توقيع الكود (Code Signing)
+
+تحتاج شهادة **Code Signing** صالحة (OV أو EV) من CA موثوق، بصيغة `.pfx`
+(صادر من جهة تُصدر شهادات Windows). ثم:
+
+```powershell
+# تحويل الملف إلى Base64 في سطر واحد (بدون أسطر جديدة)
+$b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\secure\naseej-codesign.pfx"))
+Set-Clipboard -Value $b64   # الصقها في CODE_SIGNING_PFX_BASE64
+```
+
+- الصق كلمة المرور في `CODE_SIGNING_PFX_PASSWORD`.
+- المسار يوقّع بـ`signtool` مع ختم زمني `http://timestamp.digicert.com`
+  وخوارزمية SHA-256، ثم يتحقق بـ`signtool verify /pa` قبل النشر.
+- الحد الأدنى المقبول في الفحص: Base64 صالح، وحجم ≥1024 بايت، ويبدأ بـ`0x30`
+  (بداية PKCS#12).
+
+### 7.4 التحقق قبل الإصدار
+
+1. من **Actions** → **Production release** → **Run workflow** بالنسخة `0.1.0`.
+2. ستنجح خطوة `Release gates` فقط إذا تحققت كل البوابات:
+   - الإصدار متطابق في `package.json` و`tauri.conf.json`.
+   - المفتاح 64 حرفًا سداسيًا وليس أصفارًا.
+   - الـPFX Base64 صالح وكلمة المروره موجودة.
+   - `POLICY_STATUS: APPROVED` و`ACCEPTANCE_STATUS: PASS`.
+
+> `ACCEPTANCE_STATUS` ما زال `PENDING` حاليًا، لذلك سيتوقف المسار عند هذه
+> البوابة حتى تُنفّذ اختبارات الأجهزة وتُوقّع في `docs/ACCEPTANCE-RECORD.md`.
+
+### 7.5 عند وجود عدة مستودعات/بيئات
+
+- **Environment secrets** (Settings → Environments → production) أفضل من
+  Repository secrets: تسمح بقاعدة موافقة يدوية قبل النشر. يجب بعدها إضافة
+  `environment: production` إلى وظيفة `build-and-publish` في `release.yml`.
+- **Organization secrets** لا تُستخدم هنا؛ المشروع مستودع واحد.
+
+### 7.6 تنظيف وتدوير
+
+- عند تسريب الـseed أو الـPFX: أنشئ مفتاحًا/شهادة جديدة، استبدل السر، وأصدر
+  نسخة جديدة؛ النسخ القديمة لا تُصلَح بأثر رجعي.
+- تُسجَّل الشهادات بتاريخ انتهاء؛ تحقق منه قبل كل إصدار سنوي.
