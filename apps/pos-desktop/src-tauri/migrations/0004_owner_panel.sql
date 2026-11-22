@@ -49,11 +49,12 @@ CREATE TABLE IF NOT EXISTS owner_panel_challenges (
 
 CREATE INDEX IF NOT EXISTS owner_panel_challenges_owner ON owner_panel_challenges(owner_user_id, purpose);
 
--- The tax is fixed: 14 percent, and the shelf prices exclude it. The tax is
--- added on top of the net price when the invoice is closed, so the printed
--- receipt shows the tax line separately. The owner can still change the rate
--- and the display mode from the control panel.
-UPDATE branches SET tax_rate_bps = 1400, prices_include_tax = 0 WHERE prices_include_tax IS NULL;
+-- Tax is optional. A branch starts with the tax switched off (rate 0) and
+-- shelf prices entered as they are charged; the owner switches it on, and
+-- sets the rate and the price display mode, from the control panel. The
+-- chosen values are what every invoice uses, and the printed receipt shows
+-- the tax line separately.
+UPDATE branches SET prices_include_tax = 0 WHERE prices_include_tax IS NULL;
 
 -- A default return policy so the returns desk works from the first day. The
 -- owner replaces these values from the control panel; the change is written

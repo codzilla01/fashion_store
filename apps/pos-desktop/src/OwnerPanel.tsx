@@ -674,6 +674,26 @@ export default function OwnerPanel({ lang, onClose }: { lang: Lang; onClose: () 
             {tab === 'tax' && (
               <section className="owner-panel-section">
                 <div className="owner-field">
+                  <label>{t.taxMode}</label>
+                  <div className="tax-choice">
+                    <button
+                      type="button"
+                      className={taxForm.rate !== '0' ? 'chosen' : ''}
+                      onClick={() => setTaxForm((current) => ({ ...current, rate: current.rate === '0' ? '14' : current.rate }))}
+                    >
+                      {lang === 'ar' ? 'الضريبة مفعّلة' : 'Tax on'}
+                    </button>
+                    <button
+                      type="button"
+                      className={taxForm.rate === '0' ? 'chosen' : ''}
+                      onClick={() => setTaxForm((current) => ({ ...current, rate: '0' }))}
+                    >
+                      {lang === 'ar' ? 'بدون ضريبة' : 'No tax'}
+                    </button>
+                  </div>
+                  <small>{lang === 'ar' ? 'الضريبة اختيارية. عند اختيار «بدون ضريبة» تُحفظ النسبة صفرًا ولا تُضاف أي ضريبة على الفواتير.' : 'Tax is optional. Choosing "No tax" stores a zero rate and no tax is added to invoices.'}</small>
+                </div>
+                <div className="owner-field">
                   <label htmlFor="owner-tax-rate">{t.taxRate}</label>
                   <input
                     id="owner-tax-rate"

@@ -13,7 +13,8 @@ const MIGRATION_0002: &str = include_str!("../migrations/0002_branch_management.
 const MIGRATION_0003: &str = include_str!("../migrations/0003_local_trial_state.sql");
 const MIGRATION_0004: &str = include_str!("../migrations/0004_owner_panel.sql");
 const MIGRATION_0005: &str = include_str!("../migrations/0005_clock_high_water.sql");
-pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+const MIGRATION_0006: &str = include_str!("../migrations/0006_loyalty_and_imports.sql");
+pub const CURRENT_SCHEMA_VERSION: i64 = 6;
 const BRANCH_ID: &str = "00000000-0000-4000-8000-000000000001";
 
 // The SQLCipher configuration
@@ -168,7 +169,7 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
             .map_err(|e| format!("MIGRATION_RECORD:{e}"))?;
         transaction.execute(
             "INSERT INTO branches(id, code, name_ar, name_en, currency_code, tax_rate_bps, prices_include_tax, timezone, created_at)
-             VALUES(?1, 'MAIN', 'الفرع الرئيسي', 'Main branch', 'EGP', 1400, NULL, 'Africa/Cairo', ?2)",
+             VALUES(?1, 'MAIN', 'الفرع الرئيسي', 'Main branch', 'EGP', 0, 0, 'Africa/Cairo', ?2)",
             rusqlite::params![BRANCH_ID, Utc::now().to_rfc3339()],
         ).map_err(|e| format!("BRANCH_INIT:{e}"))?;
         seed_catalog_defaults(&transaction)?;
@@ -270,6 +271,26 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
             .commit()
             .map_err(|e| format!("MIGRATION_0005_COMMIT:{e}"))?;
         version = 5;
+    }
+    if version < 6 {
+        trace!("migrations: applying migration 0006");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Exclusive)
+            .map_err(|e| format!("MIGRATION_0006_BEGIN:{e}"))?;
+        transaction
+            .execute_batch(MIGRATION_0006)
+            .map_err(|e| format!("MIGRATION_0006:{e}"))?;
+        let digest = hex::encode(Sha256::digest(MIGRATION_0006.as_bytes()));
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations(version, checksum, applied_at) VALUES(6, ?1, ?2)",
+                rusqlite::params![digest, Utc::now().to_rfc3339()],
+            )
+            .map_err(|e| format!("MIGRATION_0006_RECORD:{e}"))?;
+        transaction
+            .commit()
+            .map_err(|e| format!("MIGRATION_0006_COMMIT:{e}"))?;
+        version = 6;
     }
     if version != CURRENT_SCHEMA_VERSION {
         return Err("DB_MIGRATION_STATE_INVALID".to_string());

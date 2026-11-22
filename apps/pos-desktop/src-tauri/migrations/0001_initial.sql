@@ -13,7 +13,7 @@ CREATE TABLE branches (
   name_ar TEXT NOT NULL,
   name_en TEXT NOT NULL,
   currency_code TEXT NOT NULL DEFAULT 'EGP' CHECK(length(currency_code)=3),
-  tax_rate_bps INTEGER NOT NULL DEFAULT 1400 CHECK(tax_rate_bps BETWEEN 0 AND 10000),
+  tax_rate_bps INTEGER NOT NULL DEFAULT 0 CHECK(tax_rate_bps BETWEEN 0 AND 10000),
   prices_include_tax INTEGER CHECK(prices_include_tax IN (0,1)), -- NULL until owner confirms
   timezone TEXT NOT NULL DEFAULT 'Africa/Cairo',
   created_at TEXT NOT NULL

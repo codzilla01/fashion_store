@@ -8,6 +8,9 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 MIGRATION = ROOT / "apps/pos-desktop/src-tauri/migrations/0001_initial.sql"
 MIGRATION_2 = ROOT / "apps/pos-desktop/src-tauri/migrations/0002_branch_management.sql"
 MIGRATION_3 = ROOT / "apps/pos-desktop/src-tauri/migrations/0003_local_trial_state.sql"
+MIGRATION_4 = ROOT / "apps/pos-desktop/src-tauri/migrations/0004_owner_panel.sql"
+MIGRATION_5 = ROOT / "apps/pos-desktop/src-tauri/migrations/0005_clock_high_water.sql"
+MIGRATION_6 = ROOT / "apps/pos-desktop/src-tauri/migrations/0006_loyalty_and_imports.sql"
 
 
 class SchemaSmokeTests(unittest.TestCase):
@@ -17,6 +20,9 @@ class SchemaSmokeTests(unittest.TestCase):
         self.db.executescript(MIGRATION.read_text(encoding="utf-8"))
         self.db.executescript(MIGRATION_2.read_text(encoding="utf-8"))
         self.db.executescript(MIGRATION_3.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_4.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_5.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_6.read_text(encoding="utf-8"))
         self.branch = "branch-test"
         self.user = "user-test"
         self.category = "category-test"
@@ -93,6 +99,9 @@ class SchemaSmokeTests(unittest.TestCase):
     def test_branch_administration_is_owner_only_and_migration_is_repeatable(self):
         self.db.executescript(MIGRATION_2.read_text(encoding="utf-8"))
         self.db.executescript(MIGRATION_3.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_4.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_5.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_6.read_text(encoding="utf-8"))
         rows = {row[0]: bool(row[1]) for row in self.db.execute(
             "SELECT code,EXISTS(SELECT 1 FROM role_permissions rp WHERE rp.role_code=roles.code AND rp.permission_code='branches.manage') FROM roles")}
         self.assertFalse(rows["cashier"])
@@ -165,3 +174,91 @@ class SchemaSmokeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class OptionalTaxAndLoyaltyTests(unittest.TestCase):
+    """The tax switch, loyalty ledger, and store credit behave as documented."""
+
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.db.execute("PRAGMA foreign_keys=ON")
+        for migration in (MIGRATION, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6):
+            self.db.executescript(migration.read_text(encoding="utf-8"))
+        self.now = "2026-11-21T09:00:00Z"
+        self.branch = uuid.uuid4().hex
+        self.user = uuid.uuid4().hex
+        self.customer = uuid.uuid4().hex
+        self.db.execute(
+            "INSERT INTO branches(id,code,name_ar,name_en,currency_code,tax_rate_bps,prices_include_tax,timezone,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
+            (self.branch, "MAIN", "فرع", "Branch", "EGP", 0, 0, "Africa/Cairo", self.now),
+        )
+        self.db.execute(
+            "INSERT INTO users(id,username,display_name,password_phc,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (self.user, "owner", "Owner", "phc", self.now, self.now),
+        )
+        self.db.execute(
+            "INSERT INTO customers(id,branch_id,consent_status,created_at,updated_at) VALUES(?,?,?,?,?)",
+            (self.customer, self.branch, "GIVEN", self.now, self.now),
+        )
+
+    def test_new_branch_defaults_to_tax_off(self):
+        rate, mode = self.db.execute(
+            "SELECT tax_rate_bps, prices_include_tax FROM branches WHERE id=?", (self.branch,)
+        ).fetchone()
+        self.assertEqual(rate, 0)
+        self.assertEqual(mode, 0)
+
+    def test_migration_0004_does_not_force_fourteen_percent(self):
+        # 0004 stamps prices_include_tax but must leave the rate untouched.
+        self.db.execute("UPDATE branches SET prices_include_tax=NULL, tax_rate_bps=0 WHERE id=?", (self.branch,))
+        self.db.executescript(MIGRATION_4.read_text(encoding="utf-8"))
+        rate, mode = self.db.execute(
+            "SELECT tax_rate_bps, prices_include_tax FROM branches WHERE id=?", (self.branch,)
+        ).fetchone()
+        self.assertEqual(rate, 0)
+        self.assertEqual(mode, 0)
+
+    def test_store_credit_balance_is_derived_from_note_and_spends(self):
+        credit = uuid.uuid4().hex
+        self.db.execute(
+            "INSERT INTO store_credits(id,branch_id,customer_id,amount_minor,created_at) VALUES(?,?,?,?,?)",
+            (credit, self.branch, self.customer, 25000, self.now),
+        )
+        self.assertEqual(
+            self.db.execute(
+                "SELECT SUM(amount_minor) FROM store_credits WHERE branch_id=? AND customer_id=?",
+                (self.branch, self.customer),
+            ).fetchone()[0],
+            25000,
+        )
+
+    def test_loyalty_ledger_is_append_only(self):
+        row = uuid.uuid4().hex
+        self.db.execute(
+            "INSERT INTO loyalty_ledger(id,branch_id,customer_id,points_delta,event_type,reason,"
+            "actor_user_id,idempotency_key,created_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (row, self.branch, self.customer, 120, "EARN", "sale", self.user, "k1", self.now),
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE loyalty_ledger SET points_delta=0 WHERE id=?", (row,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("DELETE FROM loyalty_ledger WHERE id=?", (row,))
+
+    def test_import_batch_meta_requires_a_batch(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute(
+                "INSERT INTO import_batch_meta(branch_id,import_batch_id,source_kind) VALUES(?,?,?)",
+                (self.branch, uuid.uuid4().hex, "CSV"),
+            )
+
+    def test_clock_high_water_is_single_row(self):
+        self.db.execute(
+            "INSERT INTO clock_high_water(singleton,high_water_utc,updated_at) VALUES(1,?,?)",
+            (self.now, self.now),
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute(
+                "INSERT INTO clock_high_water(singleton,high_water_utc,updated_at) VALUES(2,?,?)",
+                (self.now, self.now),
+            )
