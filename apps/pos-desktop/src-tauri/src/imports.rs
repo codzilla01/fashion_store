@@ -30,10 +30,13 @@ pub struct ImportCommitResult {
 // Commands
 // ---------------------------------------------------------------------------
 
+/// A previewed batch with the exact bytes it came from.
+type PreviewedBatch = (ImportPreview, Vec<u8>);
+
 /// A preview is held in memory only between the preview and commit calls, so
 /// nothing provisional is written into the encrypted database.
-fn preview_cache() -> &'static std::sync::Mutex<HashMap<String, (ImportPreview, Vec<u8>)>> {
-    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, (ImportPreview, Vec<u8>)>>> =
+fn preview_cache() -> &'static std::sync::Mutex<HashMap<String, PreviewedBatch>> {
+    static CACHE: std::sync::OnceLock<std::sync::Mutex<HashMap<String, PreviewedBatch>>> =
         std::sync::OnceLock::new();
     CACHE.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
 }

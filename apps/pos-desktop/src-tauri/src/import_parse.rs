@@ -266,25 +266,22 @@ fn xml_unescape(value: &str) -> String {
             "quot" => out.push('"'),
             "apos" => out.push('\''),
             _ => {
-                if let Some(hex) = entity
+                let code = entity
                     .strip_prefix("#x")
                     .or_else(|| entity.strip_prefix("#X"))
-                {
-                    if let Ok(code) = u32::from_str_radix(hex, 16) {
-                        if let Some(character) = char::from_u32(code) {
-                            out.push(character);
-                        }
+                    .and_then(|hex| u32::from_str_radix(hex, 16).ok())
+                    .or_else(|| {
+                        entity
+                            .strip_prefix('#')
+                            .and_then(|dec| dec.parse::<u32>().ok())
+                    });
+                match code.and_then(char::from_u32) {
+                    Some(character) => out.push(character),
+                    None => {
+                        out.push('&');
+                        out.push_str(entity);
+                        out.push(';');
                     }
-                } else if let Some(dec) = entity.strip_prefix('#') {
-                    if let Ok(code) = dec.parse::<u32>() {
-                        if let Some(character) = char::from_u32(code) {
-                            out.push(character);
-                        }
-                    }
-                } else {
-                    out.push('&');
-                    out.push_str(entity);
-                    out.push(';');
                 }
             }
         }

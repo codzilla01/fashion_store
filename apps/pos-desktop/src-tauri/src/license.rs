@@ -379,10 +379,10 @@ pub fn record_trusted_time(state: &crate::AppState, status: &LicenseStatus) -> R
             None => recorded_high,
         });
     }
-    if let Some(reference) = reference {
-        if now + chrono::Duration::minutes(5) < reference {
-            return Err("CLOCK_ROLLBACK_DETECTED".to_string());
-        }
+    if let Some(reference) = reference
+        && now + chrono::Duration::minutes(5) < reference
+    {
+        return Err("CLOCK_ROLLBACK_DETECTED".to_string());
     }
     let observed_high = reference
         .map(|value| value.max(now).to_rfc3339())
