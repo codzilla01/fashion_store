@@ -62,8 +62,8 @@ pub fn preview_import(
     let table = if is_xlsx {
         parse_xlsx(&bytes)?
     } else {
-        let text = String::from_utf8(bytes.clone())
-            .map_err(|_| "IMPORT_FILE_NOT_UTF8".to_string())?;
+        let text =
+            String::from_utf8(bytes.clone()).map_err(|_| "IMPORT_FILE_NOT_UTF8".to_string())?;
         parse_delimited(&text, None)?
     };
     if table.rows.len() > 50_000 {
@@ -183,7 +183,10 @@ pub fn commit_import(
     for ((name_ar, category), rows) in products {
         let product_id = Uuid::new_v4().to_string();
         let category_id = ensure_category(&tx, &session.branch_id, &category)?;
-        let name_en = rows.first().map(|row| row.name_en.clone()).unwrap_or_default();
+        let name_en = rows
+            .first()
+            .map(|row| row.name_en.clone())
+            .unwrap_or_default();
         let base_price = rows.iter().map(|row| row.price_minor).max().unwrap_or(0);
         let base_cost = rows.iter().map(|row| row.cost_minor).min().unwrap_or(0);
         tx.execute(
@@ -369,7 +372,9 @@ pub fn get_import_batches(
         .query_map(params![&session.branch_id], |row| {
             Ok(ImportBatchRow {
                 id: row.get(0)?,
-                source_kind: row.get::<_, Option<String>>(1)?.unwrap_or_else(|| "CSV".into()),
+                source_kind: row
+                    .get::<_, Option<String>>(1)?
+                    .unwrap_or_else(|| "CSV".into()),
                 status: row.get(2)?,
                 total_rows: row.get(3)?,
                 accepted_rows: row.get(4)?,

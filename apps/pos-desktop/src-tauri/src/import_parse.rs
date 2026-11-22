@@ -18,7 +18,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-
 /// A parsed delimited file: header names plus data rows.
 #[derive(Debug)]
 pub struct ParsedTable {
@@ -267,7 +266,10 @@ fn xml_unescape(value: &str) -> String {
             "quot" => out.push('"'),
             "apos" => out.push('\''),
             _ => {
-                if let Some(hex) = entity.strip_prefix("#x").or_else(|| entity.strip_prefix("#X")) {
+                if let Some(hex) = entity
+                    .strip_prefix("#x")
+                    .or_else(|| entity.strip_prefix("#X"))
+                {
                     if let Ok(code) = u32::from_str_radix(hex, 16) {
                         if let Some(character) = char::from_u32(code) {
                             out.push(character);
@@ -382,7 +384,11 @@ pub fn parse_xlsx(bytes: &[u8]) -> Result<ParsedTable, String> {
         if cells.is_empty() {
             continue;
         }
-        let width = cells.iter().map(|(column, _)| column + 1).max().unwrap_or(0);
+        let width = cells
+            .iter()
+            .map(|(column, _)| column + 1)
+            .max()
+            .unwrap_or(0);
         let mut row = vec![String::new(); width];
         for (column, value) in cells {
             if column < row.len() {
@@ -482,8 +488,12 @@ pub fn parse_amount_minor(value: &str) -> Result<i64, String> {
     let cleaned = value
         .chars()
         .map(|character| match character {
-            '٠'..='٩' => char::from_u32(character as u32 - 0x0660 + '0' as u32).unwrap_or(character),
-            '۰'..='۹' => char::from_u32(character as u32 - 0x06f0 + '0' as u32).unwrap_or(character),
+            '٠'..='٩' => {
+                char::from_u32(character as u32 - 0x0660 + '0' as u32).unwrap_or(character)
+            }
+            '۰'..='۹' => {
+                char::from_u32(character as u32 - 0x06f0 + '0' as u32).unwrap_or(character)
+            }
             other => other,
         })
         .filter(|character| {
@@ -737,8 +747,11 @@ mod tests {
 
     #[test]
     fn rejects_rows_without_size_or_color() {
-        let table = parse_delimited("name_ar,category,price,size,color\nshirt,tops,250,M,\n", None)
-            .expect("parsed");
+        let table = parse_delimited(
+            "name_ar,category,price,size,color\nshirt,tops,250,M,\n",
+            None,
+        )
+        .expect("parsed");
         let (preview, errors) = validate_products(&table, "batch");
         assert_eq!(preview.accepted_rows, 0);
         assert_eq!(errors.len(), 1);
@@ -765,7 +778,6 @@ mod tests {
         assert_eq!(column_index("AA9"), Some(26));
         assert_eq!(column_index("12"), None);
     }
-
 
     /// Build a minimal, stored (uncompressed) XLSX container around the cells,
     /// so the ZIP reader and the sheet reader are exercised end to end.
@@ -863,14 +875,7 @@ mod tests {
     fn reads_a_shared_string_workbook() {
         let workbook = stored_xlsx(
             &[
-                "name_ar",
-                "category",
-                "price",
-                "size",
-                "color",
-                "shirt",
-                "tops",
-                "red",
+                "name_ar", "category", "price", "size", "color", "shirt", "tops", "red",
             ],
             &[
                 "<row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c><c r=\"C1\" t=\"s\"><v>2</v></c><c r=\"D1\" t=\"s\"><v>3</v></c><c r=\"E1\" t=\"s\"><v>4</v></c></row>",

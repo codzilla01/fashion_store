@@ -1145,8 +1145,7 @@ pub fn create_sale(
     }
     // Store credit belongs to a customer, so it can only be used when the
     // sale is attached to one.
-    if request.payments.iter().any(|p| p.method == "STORE_CREDIT")
-        && request.customer_id.is_none()
+    if request.payments.iter().any(|p| p.method == "STORE_CREDIT") && request.customer_id.is_none()
     {
         return Err("STORE_CREDIT_REQUIRES_CUSTOMER".to_string());
     }
