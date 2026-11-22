@@ -1,0 +1,62 @@
+FASHION STORE POS — RIGHTS AND USE
+Version 0.1.0 — 2026-11-21
+
+1. LICENCE
+The software is licensed, not sold. The customer receives a device-bound,
+time-limited right to use the application under the plan recorded in the
+signed licence file (.lic). Ownership of the code and trademarks remains with
+the developer.
+
+2. SCOPE
+A standard subscription covers one shop, one active branch, up to five named
+users, and the features listed in the signed licence payload. A branch or
+user above that limit requires a separate licence or plan upgrade.
+
+3. TRIAL AND EXPIRY
+A device may run an automatic 7-day local evaluation followed by a 14-day
+grace period. During the grace period selling remains available so a shop is
+not stopped mid-day. After the grace period selling stops; reading reports,
+backing up and reprinting existing invoices remain available until the licence
+is restored.
+
+4. DEVICE TRANSFER
+Transfer to a replacement device is permitted once without charge during a
+paid subscription. Further transfers carry the fee approved in
+docs/RELEASE-DECISIONS.md. Each transfer requires a new signed licence bound
+to the new device fingerprint. Database keys are never copied between devices.
+
+5. DATA AND PRIVACY
+All business data remains on the customer's Windows device. The application
+does not send customer names, phone numbers or invoices to any external
+service. The customer is responsible for encryption passwords, backup media,
+access control on the Windows account and compliance with applicable data
+protection law.
+
+6. BACKUPS
+The customer must keep encrypted backups on external media and test a restore
+weekly. The developer is not responsible for data loss when no tested backup
+exists.
+
+7. SUPPORT
+Support covers installation, activation, and reproducible application faults.
+It does not cover hardware failures, Windows administration, network setup,
+or recovery of lost passwords. Support hours and contact details are supplied
+on the delivery sheet, not in this file.
+
+8. WARRANTY AND LIABILITY
+The software is supplied "as is" for the agreed subscription term. The
+developer does not warrant uninterrupted operation or fitness for a particular
+purpose beyond the documented feature list. Liability is limited to the fee
+paid for the current subscription period. This clause requires review by a
+qualified lawyer before first commercial delivery.
+
+9. FEES
+The approved annual fee and transfer fee are listed in
+docs/RELEASE-DECISIONS.md. Fees are paid in advance. Taxes are the
+customer's responsibility unless stated otherwise on the invoice.
+
+10. ACCEPTANCE
+By importing a signed licence and processing the first live sale, the
+customer confirms that the hardware acceptance tests in
+docs/ACCEPTANCE-RECORD.md were completed and that the tax and return
+policies were reviewed.

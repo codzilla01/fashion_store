@@ -224,3 +224,24 @@ Get-FileHash .\naseej-pos-0.1.0-setup.exe -Algorithm SHA256
 - ❌ أي private key أو seed
 - ❌ سجل الإصدار المحلي `NaseejLicenseIssuer`
 - ❌ أي `.req`/`.lic` أو `.bkz` خاص بمحل آخر
+
+---
+
+## 8. بوابة الإصدار المؤتمت (أُضيفت 2026-11-21)
+
+مسار [`.github/workflows/release.yml`](../.github/workflows/release.yml) يعمل عند دفع وسم `v*` أو تشغيله يدويًا، و**يفشل قبل البناء** إذا لم تتوفر أي بوابة من بواباته:
+
+- [x] تطابق رقم الإصدار في `package.json` و`tauri.conf.json` لتطبيقَي POS والتفعيل (`tools/check_release_version.py`).
+- [ ] `NASEEJ_LICENSE_PUBLIC_KEY_HEX` موجود كـ GitHub Secret ويتكون من 64 حرفًا سداسيًا وليس أصفارًا.
+- [ ] `CODE_SIGNING_PFX_BASE64` و`CODE_SIGNING_PFX_PASSWORD` موجودان كأسرار.
+- [x] [السياسات التجارية معتمدة](RELEASE-DECISIONS.md) (`POLICY_STATUS: APPROVED`).
+- [x] تقريب الضريبة لأقرب ١ ج.م مطبّق في حسابات البيع والاستبدال وفي معاينة الواجهة، مع اختبار وحدة `tax_policy_tests`.
+- [ ] [سجل اختبار الأجهزة موقّع](ACCEPTANCE-RECORD.md) (`ACCEPTANCE_STATUS: PASS`).
+
+عند نجاح البوابة ينتج المسار:
+
+1. مثبت POS ومثبت Activation Tool، كلاهما موقّع بـ SHA-256 مع ختم زمني ومُتحقَّق من توقيعه.
+2. `sbom.json` بصيغة CycloneDX، و`SHA256SUMS.txt`، و`RIGHTS.txt`، و`RELEASE_NOTES.md`.
+3. GitHub Release يحمل كل الملفات أعلاه.
+
+لا تُغيّر البنود `[ ]` إلى `[x]` في هذا المستند حتى تتحقق فعليًا؛ الوسم وحده لا يكفي.

@@ -1298,14 +1298,14 @@ pub fn create_sale(
         let tax_base = gross
             .checked_sub(line_discount_minor)
             .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
-        let line_tax_minor = if prices_include_tax == 1 {
+        let line_tax_minor = round_tax_to_policy(if prices_include_tax == 1 {
             rounded_ratio(
                 tax_base as i128 * tax_rate_bps as i128,
                 (10000 + tax_rate_bps) as i128,
             )?
         } else {
             rounded_ratio(tax_base as i128 * tax_rate_bps as i128, 10000)?
-        };
+        })?;
         let line_total_minor = if prices_include_tax == 1 {
             tax_base
         } else {
@@ -2358,14 +2358,14 @@ pub fn create_exchange(
         let tax_base = gross
             .checked_sub(discount)
             .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
-        let line_tax = if prices_include_tax == 1 {
+        let line_tax = round_tax_to_policy(if prices_include_tax == 1 {
             rounded_ratio(
                 tax_base as i128 * tax_rate_bps as i128,
                 (10000 + tax_rate_bps) as i128,
             )?
         } else {
             rounded_ratio(tax_base as i128 * tax_rate_bps as i128, 10000)?
-        };
+        })?;
         let line_total = if prices_include_tax == 1 {
             tax_base
         } else {
@@ -3975,6 +3975,16 @@ fn rounded_ratio(numerator: i128, denominator: i128) -> Result<i64, String> {
     i64::try_from(rounded).map_err(|_| "AMOUNT_OVERFLOW".to_string())
 }
 
+/// Tax is approved at 14% with rounding to the nearest whole EGP.
+/// Amounts are held in minor units (piastres), so one EGP is 100 minor units.
+fn round_tax_to_policy(tax_minor: i64) -> Result<i64, String> {
+    if tax_minor < 0 {
+        return Err("AMOUNT_INVALID".to_string());
+    }
+    let rounded = ((tax_minor as i128 + 50) / 100) * 100;
+    i64::try_from(rounded).map_err(|_| "AMOUNT_OVERFLOW".to_string())
+}
+
 fn rounded_signed_ratio(numerator: i128, denominator: i128) -> Result<i64, String> {
     if denominator <= 0 {
         return Err("AMOUNT_INVALID".to_string());
@@ -4063,4 +4073,20 @@ pub(crate) fn db_error(error: rusqlite::Error) -> String {
             _ => "OPERATION_FAILED".to_string(),
         }
     )
+}
+
+#[cfg(test)]
+mod tax_policy_tests {
+    use super::round_tax_to_policy;
+
+    #[test]
+    fn tax_rounds_to_nearest_whole_egp() {
+        // Minor units are piastres: 100 minor = 1 EGP.
+        assert_eq!(round_tax_to_policy(1_240), Ok(1_000));
+        assert_eq!(round_tax_to_policy(1_250), Ok(1_300));
+        assert_eq!(round_tax_to_policy(49), Ok(0));
+        assert_eq!(round_tax_to_policy(50), Ok(100));
+        assert_eq!(round_tax_to_policy(0), Ok(0));
+        assert!(round_tax_to_policy(-1).is_err());
+    }
 }

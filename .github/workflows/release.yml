@@ -1,0 +1,283 @@
+name: Production release
+
+# A tagged release is created only when every gate below passes. Secrets are
+# read directly by GitHub Actions; never echo their values into logs.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version from package.json / tauri.conf.json (e.g. 0.1.0)"
+        required: true
+        default: "0.1.0"
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: production-release
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: Release gates
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          INPUT_VERSION="${{ inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Release version: $VERSION"
+
+      - name: Validate version consistency
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: python3 tools/check_release_version.py "$VERSION"
+
+      - name: Validate production licence public key
+        shell: bash
+        env:
+          KEY: ${{ secrets.NASEEJ_LICENSE_PUBLIC_KEY_HEX }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          key = os.environ.get("KEY", "").strip()
+          if not re.fullmatch(r"[0-9a-fA-F]{64}", key):
+              print("::error::NASEEJ_LICENSE_PUBLIC_KEY_HEX must be exactly 64 hex characters. No value was printed.")
+              sys.exit(1)
+          if set(key) <= {"0"}:
+              print("::error::NASEEJ_LICENSE_PUBLIC_KEY_HEX is still the all-zero placeholder.")
+              sys.exit(1)
+          print("Production licence public key is configured (value hidden).")
+          PY
+
+      - name: Validate code-signing material
+        shell: bash
+        env:
+          PFX: ${{ secrets.CODE_SIGNING_PFX_BASE64 }}
+          PASSWORD: ${{ secrets.CODE_SIGNING_PFX_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import base64, os, sys
+          pfx = os.environ.get("PFX", "").strip()
+          password = os.environ.get("PASSWORD", "")
+          if not pfx:
+              print("::error::CODE_SIGNING_PFX_BASE64 is missing. No value was printed.")
+              sys.exit(1)
+          if not password:
+              print("::error::CODE_SIGNING_PFX_PASSWORD is missing. No value was printed.")
+              sys.exit(1)
+          try:
+              decoded = base64.b64decode(pfx, validate=True)
+          except Exception:
+              print("::error::CODE_SIGNING_PFX_BASE64 is not valid base64. No value was printed.")
+              sys.exit(1)
+          if len(decoded) < 1024 or decoded[:1] != b"\x30":
+              print("::error::CODE_SIGNING_PFX_BASE64 does not look like a PKCS#12 certificate. No value was printed.")
+              sys.exit(1)
+          print("Code-signing certificate is configured (value hidden).")
+          PY
+
+      - name: Validate approved business policies
+        shell: bash
+        run: |
+          if ! grep -qx 'POLICY_STATUS: APPROVED' docs/RELEASE-DECISIONS.md; then
+            echo "::error::docs/RELEASE-DECISIONS.md is not approved."
+            exit 1
+          fi
+          echo "Business policies are approved."
+
+      - name: Validate signed hardware acceptance record
+        shell: bash
+        run: |
+          if ! grep -qx 'ACCEPTANCE_STATUS: PASS' docs/ACCEPTANCE-RECORD.md; then
+            echo "::error::docs/ACCEPTANCE-RECORD.md is not marked PASS."
+            exit 1
+          fi
+          echo "Hardware acceptance record is signed."
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: cyclonedx-json
+          output-file: sbom.json
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+          if-no-files-found: error
+
+  build-and-publish:
+    name: Build, sign and publish
+    needs: preflight
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.preflight.outputs.version }}
+      NASEEJ_LICENSE_PUBLIC_KEY_HEX: ${{ secrets.NASEEJ_LICENSE_PUBLIC_KEY_HEX }}
+      CODE_SIGNING_PFX_PASSWORD: ${{ secrets.CODE_SIGNING_PFX_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.22.3"
+          cache: npm
+          cache-dependency-path: |
+            apps/pos-desktop/package-lock.json
+            apps/activation-tool/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            apps/pos-desktop/src-tauri
+            apps/activation-tool/src-tauri
+
+      - name: Use Strawberry Perl for the vendored OpenSSL build
+        shell: bash
+        run: |
+          for candidate in "/c/Strawberry/perl/bin" "/c/Strawberry/bin"; do
+            if [ -d "$candidate" ]; then
+              echo "${candidate}" | sed 's|^/c/|C:/|' >> "$GITHUB_PATH"
+              break
+            fi
+          done
+          echo "perl resolves to: $(command -v perl || true)"
+
+      - name: Install frontend dependencies
+        shell: bash
+        run: |
+          (cd apps/pos-desktop && npm ci)
+          (cd apps/activation-tool && npm ci)
+
+      - name: Decode signing certificate
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.CODE_SIGNING_PFX_BASE64 }}
+        run: |
+          $bytes = [Convert]::FromBase64String($env:PFX_BASE64)
+          [IO.File]::WriteAllBytes((Join-Path $env:RUNNER_TEMP "code-signing.pfx"), $bytes)
+          Write-Host "Certificate decoded to runner temp (value hidden)."
+
+      - name: Build signed-ready POS installer
+        shell: bash
+        working-directory: apps/pos-desktop
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Build signed-ready Activation Tool installer
+        shell: bash
+        working-directory: apps/activation-tool
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Sign and verify Windows installers
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" `
+            -Filter signtool.exe -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool.exe was not found on the runner." }
+
+          $pfx = Join-Path $env:RUNNER_TEMP "code-signing.pfx"
+          $bundleDirs = @(
+            "apps/pos-desktop/src-tauri/target/release/bundle/nsis",
+            "apps/activation-tool/src-tauri/target/release/bundle/nsis"
+          )
+          $exeFiles = @()
+          foreach ($dir in $bundleDirs) {
+            $exeFiles += @(Get-ChildItem -Path $dir -Filter *.exe -Recurse -ErrorAction SilentlyContinue)
+          }
+          if ($exeFiles.Count -lt 2) { throw "Expected both installers; found $($exeFiles.Count) executable(s)." }
+
+          foreach ($file in $exeFiles) {
+            & $signtool.FullName sign `
+              /f $pfx `
+              /p $env:CODE_SIGNING_PFX_PASSWORD `
+              /tr http://timestamp.digicert.com `
+              /td sha256 /fd sha256 $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Signing failed for $($file.Name)." }
+
+            & $signtool.FullName verify /pa $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Signature verification failed for $($file.Name)." }
+            Write-Host "Signed and verified: $($file.Name)"
+          }
+
+      - name: Assemble release assets
+        shell: pwsh
+        run: |
+          $out = "release-assets"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+
+          $exeFiles = @()
+          foreach ($dir in @(
+            "apps/pos-desktop/src-tauri/target/release/bundle/nsis",
+            "apps/activation-tool/src-tauri/target/release/bundle/nsis"
+          )) {
+            $exeFiles += @(Get-ChildItem -Path $dir -Filter *.exe -Recurse)
+          }
+
+          foreach ($file in $exeFiles) { Copy-Item $file.FullName $out }
+          $lines = foreach ($file in $exeFiles) {
+            $hash = (Get-FileHash -Algorithm SHA256 $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $([IO.Path]::GetFileName($file.FullName))"
+          }
+          $lines | Set-Content (Join-Path $out "SHA256SUMS.txt") -Encoding utf8
+
+          Copy-Item docs/RIGHTS.txt $out
+          Copy-Item docs/RELEASE-DECISIONS.md $out
+
+          $notes = @"
+          # Fashion Store POS v$env:VERSION
+
+          Production build with an embedded production licence public key and
+          SHA-256 signed Windows installers.
+
+          ## Assets
+          - `SHA256SUMS.txt` — verify with `Get-FileHash <file> -Algorithm SHA256`.
+          - `sbom.json` — CycloneDX bill of materials.
+          - `RIGHTS.txt` — licence terms approved by the store owner.
+          - `RELEASE-DECISIONS.md` — approved tax, returns, licence and backup policies.
+
+          ## Upgrade note
+          Import `.lic` with the Activation Tool before the trial ends. Restore a
+          `.bkz` backup before entering live store data.
+          "@
+          $notes | Set-Content (Join-Path $out "RELEASE_NOTES.md") -Encoding utf8
+
+      - name: Download SBOM into release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: sbom
+          path: release-assets
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = Get-ChildItem -Path release-assets -File | ForEach-Object { $_.FullName }
+          gh release create "v$env:VERSION" `
+            --target $env:GITHUB_SHA `
+            --title "Fashion Store POS v$env:VERSION" `
+            --notes-file release-assets/RELEASE_NOTES.md `
+            $assets
