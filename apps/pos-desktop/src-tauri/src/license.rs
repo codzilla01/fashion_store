@@ -360,19 +360,46 @@ pub fn record_trusted_time(state: &crate::AppState, status: &LicenseStatus) -> R
         )
         .optional()
         .map_err(|_| "LICENSE_CLOCK_STATE_FAILED".to_string())?;
-    if let Some(previous) = previous {
-        let previous = chrono::DateTime::parse_from_rfc3339(&previous)
-            .map_err(|_| "LICENSE_CLOCK_STATE_INVALID".to_string())?
-            .with_timezone(&Utc);
-        if now + chrono::Duration::minutes(5) < previous {
+    let high_water: Option<String> = tx
+        .query_row(
+            "SELECT high_water_utc FROM clock_high_water WHERE singleton=1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|_| "LICENSE_CLOCK_STATE_FAILED".to_string())?;
+
+    // Both the last observation and the all-time high-water mark are trusted.
+    // A forward jump followed by a return to real time is therefore detected
+    // just like an ordinary rollback.
+    let mut reference = previous.as_deref().map(parse_utc).transpose()?;
+    if let Some(recorded_high) = high_water.as_deref().map(parse_utc).transpose()? {
+        reference = Some(match reference {
+            Some(value) => value.max(recorded_high),
+            None => recorded_high,
+        });
+    }
+    if let Some(reference) = reference {
+        if now + chrono::Duration::minutes(5) < reference {
             return Err("CLOCK_ROLLBACK_DETECTED".to_string());
         }
     }
+    let observed_high = reference
+        .map(|value| value.max(now).to_rfc3339())
+        .unwrap_or_else(|| now_text.clone());
+
+    tx.execute(
+        "INSERT INTO clock_high_water(singleton,high_water_utc,updated_at)
+         VALUES(1,?1,?2)
+         ON CONFLICT(singleton) DO UPDATE SET high_water_utc=excluded.high_water_utc,updated_at=excluded.updated_at",
+        rusqlite::params![observed_high, now_text],
+    )
+    .map_err(|_| "LICENSE_CLOCK_STATE_FAILED".to_string())?;
     tx.execute(
         "INSERT INTO local_license_state(singleton,license_id,signed_payload_ciphertext,last_seen_utc,last_invoice_counter,state_updated_at)
          VALUES(1,?1,NULL,?2,0,?2)
          ON CONFLICT(singleton) DO UPDATE SET license_id=excluded.license_id,last_seen_utc=excluded.last_seen_utc,state_updated_at=excluded.state_updated_at",
-        rusqlite::params![status.license_id, now_text],
+        rusqlite::params![status.license_id, now_text.clone()],
     ).map_err(|_| "LICENSE_CLOCK_STATE_FAILED".to_string())?;
     tx.commit()
         .map_err(|_| "LICENSE_CLOCK_STATE_FAILED".to_string())

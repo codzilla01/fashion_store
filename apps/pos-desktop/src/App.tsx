@@ -226,6 +226,11 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name] ?? paths.grid} /></svg>;
 }
 
+/** Approved policy: tax is rounded to the nearest whole EGP (100 piastres). */
+function roundTaxToPolicy(minor: number) {
+  return Math.round(minor / 100) * 100;
+}
+
 function money(minor: number, lang: Lang) {
   return new Intl.NumberFormat(lang === 'ar' ? 'ar-EG' : 'en-EG', {
     style: 'currency', currency: 'EGP', maximumFractionDigits: 0,
@@ -489,9 +494,9 @@ function App() {
     const afterItemDiscount = Math.max(0, subtotal - itemDiscount);
     const invoiceDiscount = Math.round(afterItemDiscount * invoiceDiscountBps / 10000);
     const netAfterDiscount = Math.max(0, afterItemDiscount - invoiceDiscount);
-    const tax = pricesIncludeTax
+    const tax = roundTaxToPolicy(pricesIncludeTax
       ? Math.round(netAfterDiscount * taxRateBps / (10000 + taxRateBps))
-      : Math.round(netAfterDiscount * taxRateBps / 10000);
+      : Math.round(netAfterDiscount * taxRateBps / 10000));
     const total = pricesIncludeTax ? netAfterDiscount : netAfterDiscount + tax;
     return { subtotal, itemDiscount, invoiceDiscount, discount: itemDiscount + invoiceDiscount, total, tax };
   }, [cart, invoiceDiscountBps, pricesIncludeTax, taxRateBps]);
@@ -513,7 +518,7 @@ function App() {
   const allVariants = catalogItems.flatMap((product) => product.variants);
   const exchangeVariant = allVariants.find((variant) => variant.id === exchangeVariantId);
   const exchangeSubtotal = exchangeVariant ? exchangeVariant.priceMinor * Math.max(0, Math.trunc(Number(exchangeQuantity) || 0)) : 0;
-  const exchangeTax = pricesIncludeTax ? Math.round(exchangeSubtotal * taxRateBps / (10000 + taxRateBps)) : Math.round(exchangeSubtotal * taxRateBps / 10000);
+  const exchangeTax = roundTaxToPolicy(pricesIncludeTax ? Math.round(exchangeSubtotal * taxRateBps / (10000 + taxRateBps)) : Math.round(exchangeSubtotal * taxRateBps / 10000));
   const exchangeTotal = pricesIncludeTax ? exchangeSubtotal : exchangeSubtotal + exchangeTax;
   const exchangeDifference = exchangeTotal - returnedValueMinor;
 
