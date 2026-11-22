@@ -253,7 +253,7 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
         version = 4;
     }
     if version < 5 {
-        trace!("migrations: applying migration 0005");
+        trace("migrations: applying migration 0005");
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Exclusive)
             .map_err(|e| format!("MIGRATION_0005_BEGIN:{e}"))?;
@@ -273,7 +273,7 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
         version = 5;
     }
     if version < 6 {
-        trace!("migrations: applying migration 0006");
+        trace("migrations: applying migration 0006");
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Exclusive)
             .map_err(|e| format!("MIGRATION_0006_BEGIN:{e}"))?;
