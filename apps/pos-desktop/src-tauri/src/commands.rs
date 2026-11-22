@@ -4173,7 +4173,8 @@ mod tax_policy_tests {
     #[test]
     fn tax_rounds_to_nearest_whole_egp() {
         // Minor units are piastres: 100 minor = 1 EGP.
-        assert_eq!(round_tax_to_policy(1_240), Ok(1_000));
+        // 12.40 EGP rounds down to 12, and 12.50 rounds up to 13.
+        assert_eq!(round_tax_to_policy(1_240), Ok(1_200));
         assert_eq!(round_tax_to_policy(1_250), Ok(1_300));
         assert_eq!(round_tax_to_policy(49), Ok(0));
         assert_eq!(round_tax_to_policy(50), Ok(100));
