@@ -2098,6 +2098,7 @@ dependencies = [
  "aes-gcm",
  "argon2",
  "chrono",
+ "flate2",
  "getrandom 0.3.4",
  "hex",
  "naseej-license-format",

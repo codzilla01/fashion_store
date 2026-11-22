@@ -207,6 +207,7 @@ jobs:
           fi
 
       - name: Test the owner panel ceremony code
+        id: pos_lib_test
         working-directory: apps/pos-desktop/src-tauri
         env:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"
@@ -221,6 +222,30 @@ jobs:
           if [ $status -ne 0 ]; then
             exit 1
           fi
+
+      # The job log is uploaded to blob storage that some runners cannot
+      # read back, so a failing unit test also publishes its own output as a
+      # commit comment. That keeps a red build diagnosable.
+      - name: Publish unit test diagnostics
+        if: failure() && steps.pos_lib_test.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### POS unit test diagnostics"
+            echo '```'
+            grep -nE "^(error|error\[|test .* FAILED|failures:|thread )" /tmp/poslib.log | head -40 || true
+            echo "#### tail:"
+            tail -n 120 /tmp/poslib.log
+            echo '```'
+          } > "$RUNNER_TEMP/pos-diag.md" || true
+          python3 -c "import json,sys; print(json.dumps({'body': open(sys.argv[1], encoding='utf-8').read()}))" \
+            "$RUNNER_TEMP/pos-diag.md" > "$RUNNER_TEMP/pos-diag.json" || exit 0
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/commits/${{ github.sha }}/comments" \
+            --data @$RUNNER_TEMP/pos-diag.json || true
 
       - name: Test the developer dashboard vault
         working-directory: apps/super-admin/src-tauri
@@ -379,6 +404,7 @@ jobs:
           echo '<!doctype html><title>placeholder</title>' > apps/pos-desktop/dist/index.html
 
       - name: Run Windows integration tests
+        id: win_tests
         working-directory: apps/pos-desktop/src-tauri
         env:
           NASEEJ_LICENSE_PUBLIC_KEY_HEX: "0000000000000000000000000000000000000000000000000000000000000000"

@@ -64,6 +64,13 @@ fn main() {
             naseej_pos::commands::get_backup_history,
             naseej_pos::commands::print_invoice,
             naseej_pos::commands::preview_invoice_receipt,
+            naseej_pos::loyalty::configure_loyalty,
+            naseej_pos::loyalty::get_loyalty_settings,
+            naseej_pos::loyalty::get_customer_loyalty,
+            naseej_pos::loyalty::get_store_credit,
+            naseej_pos::imports::preview_import,
+            naseej_pos::imports::commit_import,
+            naseej_pos::imports::get_import_batches,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Naseej POS");

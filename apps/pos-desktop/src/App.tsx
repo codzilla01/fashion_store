@@ -48,11 +48,19 @@ type CartLine = {
 type PaymentLine = { id: string; method: PayMethod; amountMinor: number };
 type DesktopGate = 'checking' | 'license' | 'setup' | 'login' | 'tax' | 'ready' | 'error';
 type AuthResult = { sessionToken: string; displayName: string; branchId: string };
-type AppStatus = { needsOwnerSetup: boolean; taxConfigurationRequired: boolean; taxRateBps: number; pricesIncludeTax: boolean | null };
+type AppStatus = { needsOwnerSetup: boolean; taxConfigurationRequired: boolean; taxEnabled: boolean; taxRateBps: number; pricesIncludeTax: boolean | null };
 type LicenseStatus = { valid: boolean; statusCode: string; deviceFingerprint: string | null; licenseId: string | null; customerId: string | null; planCode: string | null; expiresAtUtc: string | null; features: string[]; limits: Record<string, number>; publicKeyConfigured: boolean; localTrial: boolean; gracePeriod: boolean; graceExpiresAtUtc: string | null; productionBuild: boolean };
 type ActivationRequest = { schema_version: number; request_id: string; product: string; app_version: string; requested_at_utc: string; device_fingerprint: string };
-type WorkspaceTab = 'manager' | 'sale' | 'inventory' | 'products' | 'purchases' | 'reports' | 'users' | 'branches' | 'backup' | 'returns';
+type WorkspaceTab = 'manager' | 'sale' | 'inventory' | 'products' | 'purchases' | 'reports' | 'users' | 'branches' | 'backup' | 'returns' | 'imports';
 type PosTarget = 'sale' | 'products' | 'users' | 'reports' | 'branches' | 'backup';
+type LoyaltySettings = { isEnabled: boolean; pointsPerCurrencyUnit: number; redeemValueMinor: number; minRedeemPoints: number };
+type LoyaltyBalance = { customerId: string; points: number; valueMinor: number; settings: LoyaltySettings };
+type StoreCreditRow = { id: string; customerId: string; issuedMinor: number; spentMinor: number; remainingMinor: number; returnDocumentId: string | null; createdAt: string };
+type ImportRowError = { rowNumber: number; code: string; column: string };
+type ImportedProductRow = { rowNumber: number; nameAr: string; nameEn: string; category: string; priceMinor: number; costMinor: number; sizeCode: string; color: string; sku: string; barcode: string | null; openingQty: number };
+type ImportPreview = { batchId: string; sourceKind: string; sourceSha256: string; totalRows: number; acceptedRows: number; rejectedRows: number; accepted: ImportedProductRow[]; errors: ImportRowError[] };
+type ImportCommitResult = { batchId: string; productsCreated: number; variantsCreated: number; stockMovements: number };
+type ImportBatchRow = { id: string; sourceKind: string; status: string; totalRows: number; acceptedRows: number; rejectedRows: number; createdAt: string; committedAt: string | null };
 type SetupOption = { id: string; code: string | null; nameAr: string; nameEn: string; colorHex: string | null; profileCode: string | null };
 type CatalogSetupOptions = { categories: SetupOption[]; brands: SetupOption[]; seasons: SetupOption[]; sizes: SetupOption[]; colors: SetupOption[] };
 type NativeInventoryRow = { variantId: string; sku: string; barcode: string | null; productNameAr: string; productNameEn: string; sizeCode: string; colorAr: string; colorEn: string; priceMinor: number; sellable: number; damaged: number; reorderLevel: number; needsReorder: boolean };
@@ -73,7 +81,7 @@ type NativeCatalogItem = { id: string; nameAr: string; nameEn: string; categoryA
 
 const words = {
   ar: {
-    sale: 'نقطة البيع', inventory: 'المخزون', products: 'الأصناف', purchases: 'المشتريات', reports: 'التقارير', users: 'المستخدمون', branches: 'الفروع', backup: 'النسخ الاحتياطي', returns: 'المرتجعات والاستبدال',
+    sale: 'نقطة البيع', inventory: 'المخزون', products: 'الأصناف', purchases: 'المشتريات', reports: 'التقارير', users: 'المستخدمون', branches: 'الفروع', backup: 'النسخ الاحتياطي', returns: 'المرتجعات والاستبدال', imports: 'استيراد البيانات',
     title: 'نقطة البيع', subtitle: 'ابدأ فاتورة جديدة — امسح الباركود أو ابحث عن الصنف',
     search: 'ابحث بالاسم، SKU أو امسح الباركود...', searchHint: 'F2 للبحث',
     all: 'الكل', shirts: 'قمصان', trousers: 'بناطيل', dresses: 'فساتين', jackets: 'جاكيتات', basics: 'أساسيات',
@@ -94,7 +102,7 @@ const words = {
     paymentsNote: 'يمكن تقسيم الدفع بين النقدي والبطاقة والمحفظة', units: 'قطعة', currency: 'ج.م',
   },
   en: {
-    sale: 'Point of sale', inventory: 'Inventory', products: 'Products', purchases: 'Purchases', reports: 'Reports', users: 'Users', branches: 'Branches', backup: 'Backup & restore', returns: 'Returns & exchanges',
+    sale: 'Point of sale', inventory: 'Inventory', products: 'Products', purchases: 'Purchases', reports: 'Reports', users: 'Users', branches: 'Branches', backup: 'Backup & restore', returns: 'Returns & exchanges', imports: 'Data import',
     title: 'Point of sale', subtitle: 'Start a new sale — scan a barcode or search the catalog',
     search: 'Search name, SKU, or scan a barcode...', searchHint: 'F2 to search',
     all: 'All items', shirts: 'Shirts', trousers: 'Trousers', dresses: 'Dresses', jackets: 'Jackets', basics: 'Basics',
@@ -376,7 +384,8 @@ function App() {
   const [exchangePaymentMethod, setExchangePaymentMethod] = useState('CASH');
   const [exchangeRefundMethod, setExchangeRefundMethod] = useState('CASH');
   const [taxNeedsConfiguration, setTaxNeedsConfiguration] = useState(false);
-  const [taxRateBps, setTaxRateBps] = useState(1400);
+  const [taxEnabled, setTaxEnabled] = useState(false);
+  const [taxRateBps, setTaxRateBps] = useState(0);
   const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
   const [licenseError, setLicenseError] = useState('');
   const [pricesIncludeTax, setPricesIncludeTax] = useState(false);
@@ -384,6 +393,15 @@ function App() {
   const [authError, setAuthError] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [taxRateInput, setTaxRateInput] = useState('14');
+  const [taxEnabledInput, setTaxEnabledInput] = useState(false);
+  const [loyaltySettings, setLoyaltySettings] = useState<LoyaltySettings>({ isEnabled: false, pointsPerCurrencyUnit: 1, redeemValueMinor: 100, minRedeemPoints: 0 });
+  const [loyaltyForm, setLoyaltyForm] = useState({ enabled: false, pointsPerCurrencyUnit: '1', redeemValue: '1', minRedeemPoints: '0' });
+  const [customerLoyalty, setCustomerLoyalty] = useState<LoyaltyBalance | null>(null);
+  const [storeCredits, setStoreCredits] = useState<StoreCreditRow[]>([]);
+  const [loyaltyPhone, setLoyaltyPhone] = useState('');
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+  const [importBatches, setImportBatches] = useState<ImportBatchRow[]>([]);
+  const [importResult, setImportResult] = useState<ImportCommitResult | null>(null);
   const [ownerPanelOpen, setOwnerPanelOpen] = useState(false);
   const [taxInclusiveInput, setTaxInclusiveInput] = useState(false);
   const returnOperationRef = useRef<{ payload: string; key: string }>({ payload: '', key: '' });
@@ -446,7 +464,9 @@ function App() {
     if (!license.valid) { setGate('license'); return; }
     const status = await invoke<AppStatus>('app_status');
     setTaxRateBps(status.taxRateBps);
-    setTaxNeedsConfiguration(status.taxConfigurationRequired);
+    setTaxEnabled(status.taxEnabled);
+    setTaxEnabledInput(status.taxEnabled);
+    setTaxNeedsConfiguration(false);
     if (status.pricesIncludeTax !== null) {
       setPricesIncludeTax(status.pricesIncludeTax);
       setTaxInclusiveInput(status.pricesIncludeTax);
@@ -552,6 +572,142 @@ function App() {
     return rows;
   }
 
+  const importFileRef = useRef<HTMLInputElement>(null);
+
+  function describeImportError(code: string, rowNumber: number) {
+    const ar: Record<string, string> = {
+      IMPORT_NAME_REQUIRED: 'اسم الصنف مطلوب',
+      IMPORT_CATEGORY_REQUIRED: 'الفئة مطلوبة',
+      IMPORT_SIZE_COLOR_REQUIRED: 'المقاس واللون مطلوبان لتوزيع المخزون',
+      IMPORT_AMOUNT_INVALID: 'قيمة مالية غير صالحة',
+      IMPORT_AMOUNT_EMPTY: 'خانة سعر فارغة',
+      IMPORT_QUANTITY_INVALID: 'كمية غير صالحة',
+      IMPORT_SKU_DUPLICATE_IN_FILE: 'كود مكرر داخل الملف',
+    };
+    const en: Record<string, string> = {
+      IMPORT_NAME_REQUIRED: 'Item name is required',
+      IMPORT_CATEGORY_REQUIRED: 'Category is required',
+      IMPORT_SIZE_COLOR_REQUIRED: 'Size and color are required to place stock',
+      IMPORT_AMOUNT_INVALID: 'Invalid amount',
+      IMPORT_AMOUNT_EMPTY: 'Empty price cell',
+      IMPORT_QUANTITY_INVALID: 'Invalid quantity',
+      IMPORT_SKU_DUPLICATE_IN_FILE: 'Duplicate code inside the file',
+    };
+    const table = lang === 'ar' ? ar : en;
+    return `${lang === 'ar' ? 'سطر' : 'Row'} ${rowNumber}: ${table[code] ?? code}`;
+  }
+
+  async function chooseImportFile(file: File | null) {
+    if (!file) return;
+    setWorkspaceBusy(true);
+    setWorkspaceError('');
+    setImportResult(null);
+    try {
+      const buffer = await file.arrayBuffer();
+      let binary = '';
+      const bytes = new Uint8Array(buffer);
+      const chunk = 0x8000;
+      for (let index = 0; index < bytes.length; index += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+      }
+      const preview = await invoke<ImportPreview>('preview_import', {
+        sessionToken,
+        fileName: file.name,
+        contentBase64: btoa(binary),
+        importType: 'PRODUCTS',
+      });
+      setImportPreview(preview);
+    } catch (error) {
+      setWorkspaceError(String(error));
+    } finally {
+      setWorkspaceBusy(false);
+      if (importFileRef.current) importFileRef.current.value = '';
+    }
+  }
+
+  async function approveImport() {
+    if (!importPreview) return;
+    setWorkspaceBusy(true);
+    setWorkspaceError('');
+    try {
+      const result = await invoke<ImportCommitResult>('commit_import', { sessionToken, batchId: importPreview.batchId });
+      setImportResult(result);
+      setImportPreview(null);
+      setImportBatches(await invoke<ImportBatchRow[]>('get_import_batches', { sessionToken }));
+      await loadNativeCatalog(sessionToken);
+    } catch (error) {
+      setWorkspaceError(String(error));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function loadLoyalty(customerId: string) {
+    try {
+      const [balance, credits] = await Promise.all([
+        invoke<LoyaltyBalance>('get_customer_loyalty', { sessionToken, customerId }),
+        invoke<StoreCreditRow[]>('get_store_credit', { sessionToken, customerId }),
+      ]);
+      setCustomerLoyalty(balance);
+      setStoreCredits(credits);
+      setLoyaltySettings(balance.settings);
+      setLoyaltyForm({
+        enabled: balance.settings.isEnabled,
+        pointsPerCurrencyUnit: String(balance.settings.pointsPerCurrencyUnit),
+        redeemValue: (balance.settings.redeemValueMinor / 100).toString(),
+        minRedeemPoints: String(balance.settings.minRedeemPoints),
+      });
+    } catch {
+      setCustomerLoyalty(null);
+      setStoreCredits([]);
+    }
+  }
+
+  async function lookupLoyalty() {
+    setWorkspaceBusy(true);
+    setWorkspaceError('');
+    try {
+      const customer = await invoke<CustomerSummary | null>('get_customer_by_phone', { sessionToken, phone: loyaltyPhone.trim() });
+      if (!customer) {
+        setCustomerLoyalty(null);
+        setStoreCredits([]);
+        setWorkspaceError(lang === 'ar' ? 'لا يوجد عميل بهذا الرقم.' : 'No customer with that phone number.');
+        return;
+      }
+      setSelectedCustomer(customer);
+      await loadLoyalty(customer.id);
+    } catch (error) {
+      setWorkspaceError(String(error));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
+  async function saveLoyaltySettings() {
+    setWorkspaceBusy(true);
+    setWorkspaceError('');
+    try {
+      const points = Number(loyaltyForm.pointsPerCurrencyUnit);
+      const redeem = Math.round(Number(loyaltyForm.redeemValue.replace(',', '.')) * 100);
+      const minimum = Number(loyaltyForm.minRedeemPoints);
+      const saved = await invoke<LoyaltySettings>('configure_loyalty', {
+        sessionToken,
+        settings: {
+          isEnabled: loyaltyForm.enabled,
+          pointsPerCurrencyUnit: Number.isFinite(points) ? Math.round(points) : 0,
+          redeemValueMinor: Number.isFinite(redeem) ? redeem : 100,
+          minRedeemPoints: Number.isFinite(minimum) ? Math.round(minimum) : 0,
+        },
+      });
+      setLoyaltySettings(saved);
+      showNotice(lang === 'ar' ? 'تم حفظ إعدادات الولاء.' : 'Loyalty settings saved.', 'success');
+    } catch (error) {
+      setWorkspaceError(String(error));
+    } finally {
+      setWorkspaceBusy(false);
+    }
+  }
+
   async function openWorkspaceTab(tab: WorkspaceTab) {
     if (tab === 'manager') {
       setActiveTab('manager');
@@ -613,6 +769,8 @@ function App() {
         setBranchAssignment((form) => ({ ...form, branchId: form.branchId || activeBranchId || branchRows[0]?.id || '', userId: form.userId || userRows.find((user) => user.isActive)?.id || '' }));
       } else if (tab === 'backup') {
         setBackupHistory(await invoke<BackupHistoryRow[]>('get_backup_history', { sessionToken }));
+      } else if (tab === 'imports') {
+        setImportBatches(await invoke<ImportBatchRow[]>('get_import_batches', { sessionToken }));
       }
     } catch (error) {
       setWorkspaceError(String(error));
@@ -974,12 +1132,10 @@ function App() {
       setDesktopName(result.displayName);
       setActiveBranchId(result.branchId);
       try { setBranches(await invoke<BranchOption[]>('get_branches', { sessionToken: result.sessionToken })); } catch { setBranches([]); }
-      if (taxNeedsConfiguration) {
-        setGate('tax');
-      } else {
-        setGate('ready');
-        await loadNativeCatalog(result.sessionToken);
-      }
+      // The tax is optional, so first run goes straight to the till; the
+      // owner turns it on from the control panel when the store needs it.
+      setGate('ready');
+      await loadNativeCatalog(result.sessionToken);
       setAuthForm((form) => ({ ...form, password: '' }));
     } catch {
       setAuthError(lang === 'ar' ? 'تعذر تسجيل الدخول أو إعداد الحساب. راجع البيانات وحاول مرة أخرى.' : 'Could not sign in or create the owner. Check the details and try again.');
@@ -990,8 +1146,9 @@ function App() {
 
   async function saveTaxConfiguration(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const rateBps = Math.round(Number(taxRateInput.replace(',', '.')) * 100);
-    if (!Number.isFinite(rateBps) || rateBps < 0 || rateBps > 10000) {
+    const typed = Math.round(Number(taxRateInput.replace(',', '.')) * 100);
+    const rateBps = taxEnabledInput ? typed : 0;
+    if (!Number.isFinite(typed) || typed < 0 || typed > 10000) {
       setAuthError(lang === 'ar' ? 'نسبة ضريبة غير صالحة.' : 'Invalid tax rate.');
       return;
     }
@@ -1000,6 +1157,7 @@ function App() {
     try {
       await invoke('configure_tax', { sessionToken, taxRateBps: rateBps, pricesIncludeTax: taxInclusiveInput });
       setTaxRateBps(rateBps);
+      setTaxEnabled(rateBps > 0);
       setPricesIncludeTax(taxInclusiveInput);
       setTaxNeedsConfiguration(false);
       setGate('ready');
@@ -1260,6 +1418,7 @@ function App() {
             className={`nav-button ${managerMode && managerSection === 'support' ? 'active' : ''}`}
             onClick={() => { setActiveTab('manager'); setManagerSection('support'); }}
           ><Icon name="inbox" size={17} />{lang === 'ar' ? 'صندوق الرسائل المحلي' : 'Local message inbox'}</button>
+          <button type="button" className={`nav-button ${activeTab === 'imports' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('imports')}><Icon name="boxes" size={17} />{lang === 'ar' ? 'استيراد البيانات' : 'Data import'}</button>
           <button type="button" className={`nav-button ${activeTab === 'backup' ? 'active' : ''}`} onClick={() => void openWorkspaceTab('backup')}><Icon name="archive" size={17} />{t.backup}</button>
         </div>
 
@@ -1397,7 +1556,7 @@ function App() {
                 <div className="remaining-row"><span>{t.remaining}</span><strong className={remaining === 0 ? 'paid' : remaining < 0 ? 'overpaid' : ''}>{money(Math.abs(remaining), lang)}{remaining < 0 ? (lang === 'ar' ? ' زيادة' : ' over') : ''}</strong></div>
               </div>
 
-              <div className="totals-block"><div className="total-row"><span>{t.subtotal}</span><span>{money(totals.subtotal, lang)}</span></div><div className="total-row discount-total"><span>{t.discounts}</span><span>− {money(totals.discount, lang)}</span></div><div className="total-row"><span>{t.tax}</span><span>{money(totals.tax, lang)}</span></div><div className="total-row due-row"><strong>{t.total}</strong><strong>{money(totals.total, lang)}</strong></div></div>
+              <div className="totals-block"><div className="total-row"><span>{t.subtotal}</span><span>{money(totals.subtotal, lang)}</span></div><div className="total-row discount-total"><span>{t.discounts}</span><span>− {money(totals.discount, lang)}</span></div>{taxEnabled && <div className="total-row"><span>{pricesIncludeTax ? t.tax : (lang === 'ar' ? 'الضريبة' : 'Tax')}</span><span>{money(totals.tax, lang)}</span></div>}<div className="total-row due-row"><strong>{t.total}</strong><strong>{money(totals.total, lang)}</strong></div></div>
               <button className="checkout-button" onClick={completeSale} disabled={!cart.length}><span className="checkout-check"><Icon name="check" size={18} /></span><span>{t.complete}</span><strong>{money(totals.total, lang)}</strong></button>
               <button className="print-button" onClick={() => void printLastInvoice()} disabled={!lastInvoiceId}><Icon name="printer" size={16} />{t.print}<kbd>F4</kbd></button>
             </aside>
@@ -1405,7 +1564,7 @@ function App() {
 
           <footer className="page-footer"><span><i className="footer-dot" />{t.demoDisclaimer}</span><span>{isTauri ? 'Local database' : t.preview} · {lang === 'ar' ? 'البيانات لا تغادر هذا الجهاز' : 'Data stays on this device'}</span><span className="footer-build">NASEEJ POS <b>0.1.0</b></span></footer>
           </> : <section className="module-workspace">
-            <div className="page-heading"><div><div className="eyebrow"><span className="live-dot" />{isTauri ? (lang === 'ar' ? 'قاعدة بيانات محلية' : 'Local database') : t.preview}</div><h1>{t[activeTab]}</h1><p>{activeTab === 'inventory' ? (lang === 'ar' ? 'الأرصدة على مستوى SKU مع سجل حركة وتسوية بسبب.' : 'Variant-level balances with an auditable movement ledger.') : activeTab === 'products' ? (lang === 'ar' ? 'أنشئ الصنف ثم كوّن متغيرات المقاس واللون.' : 'Create a product and configure its size/color variants.') : activeTab === 'purchases' ? (lang === 'ar' ? 'الموردون وأوامر التوريد والاستلام الجزئي.' : 'Suppliers, purchase orders, and partial receipts.') : activeTab === 'reports' ? (lang === 'ar' ? 'نطاق زمني، ملخص مبيعات، وتقارير ربح مقيّدة بالصلاحية.' : 'Date range, sales summary, and permission-gated profit reporting.') : activeTab === 'branches' ? (lang === 'ar' ? 'حدود الفروع مرتبطة بالرخصة؛ ويستطيع المالك إسناد الموظفين لكل فرع.' : 'Branch limits are enforced by the license; owners assign staff per branch.') : activeTab === 'backup' ? (lang === 'ar' ? 'نسخ .bkz مشفّر بكلمة مرور مع فحص سلامة ونسخة حماية قبل الاستعادة.' : 'Password-encrypted .bkz backups with integrity checks and a pre-restore safeguard.') : activeTab === 'returns' ? (lang === 'ar' ? 'إرجاع جزئي أو استبدال ذري، مع حفظ حركة المخزون وفرق التسوية.' : 'Partial returns or atomic exchanges with linked stock movements and settlement.') : (lang === 'ar' ? 'أنشئ حسابات موظفين بصلاحيات مقيدة دون كشف كلمات المرور.' : 'Manage staff accounts with restricted roles; passwords never leave the backend.')}</p></div><div className="date-block"><div className="date-icon"><Icon name={activeTab === 'reports' ? 'chart' : activeTab === 'branches' ? 'branch' : activeTab === 'backup' ? 'backup' : activeTab === 'returns' ? 'return' : 'box'} size={17} /></div><div><span>{lang === 'ar' ? 'نسيج POS' : 'Naseej POS'}</span><strong>{isTauri ? (lang === 'ar' ? 'محلي' : 'Offline') : t.preview}</strong></div></div></div>
+            <div className="page-heading"><div><div className="eyebrow"><span className="live-dot" />{isTauri ? (lang === 'ar' ? 'قاعدة بيانات محلية' : 'Local database') : t.preview}</div><h1>{t[activeTab]}</h1><p>{activeTab === 'inventory' ? (lang === 'ar' ? 'الأرصدة على مستوى SKU مع سجل حركة وتسوية بسبب.' : 'Variant-level balances with an auditable movement ledger.') : activeTab === 'products' ? (lang === 'ar' ? 'أنشئ الصنف ثم كوّن متغيرات المقاس واللون.' : 'Create a product and configure its size/color variants.') : activeTab === 'purchases' ? (lang === 'ar' ? 'الموردون وأوامر التوريد والاستلام الجزئي.' : 'Suppliers, purchase orders, and partial receipts.') : activeTab === 'reports' ? (lang === 'ar' ? 'نطاق زمني، ملخص مبيعات، وتقارير ربح مقيّدة بالصلاحية.' : 'Date range, sales summary, and permission-gated profit reporting.') : activeTab === 'branches' ? (lang === 'ar' ? 'حدود الفروع مرتبطة بالرخصة؛ ويستطيع المالك إسناد الموظفين لكل فرع.' : 'Branch limits are enforced by the license; owners assign staff per branch.') : activeTab === 'backup' ? (lang === 'ar' ? 'نسخ .bkz مشفّر بكلمة مرور مع فحص سلامة ونسخة حماية قبل الاستعادة.' : 'Password-encrypted .bkz backups with integrity checks and a pre-restore safeguard.') : activeTab === 'returns' ? (lang === 'ar' ? 'إرجاع جزئي أو استبدال ذري، مع حفظ حركة المخزون وفرق التسوية.' : 'Partial returns or atomic exchanges with linked stock movements and settlement.') : activeTab === 'imports' ? (lang === 'ar' ? 'استيراد CSV أو XLSX مع معاينة ومراجعة قبل أي كتابة.' : 'Import CSV or XLSX with a preview and review before anything is written.') : (lang === 'ar' ? 'أنشئ حسابات موظفين بصلاحيات مقيدة دون كشف كلمات المرور.' : 'Manage staff accounts with restricted roles; passwords never leave the backend.')}</p></div><div className="date-block"><div className="date-icon"><Icon name={activeTab === 'reports' ? 'chart' : activeTab === 'branches' ? 'branch' : activeTab === 'backup' ? 'backup' : activeTab === 'returns' ? 'return' : 'box'} size={17} /></div><div><span>{lang === 'ar' ? 'نسيج POS' : 'Naseej POS'}</span><strong>{isTauri ? (lang === 'ar' ? 'محلي' : 'Offline') : t.preview}</strong></div></div></div>
             {workspaceError && <div className="module-error" role="alert">{workspaceError}</div>}
             {workspaceBusy && <div className="module-loading"><span />{lang === 'ar' ? 'جارٍ الحفظ أو التحميل…' : 'Loading or saving…'}</div>}
             {activeTab === 'inventory' && <div className="module-grid">
@@ -1445,11 +1604,57 @@ function App() {
               <form className="module-card module-form" onSubmit={createUser}><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'صلاحية المالك' : 'Owner-only permission'}</span><h2>{lang === 'ar' ? 'إنشاء حساب موظف' : 'Create staff account'}</h2></div><div className="stat-icon lilac"><Icon name="user" /></div></div><label>{lang === 'ar' ? 'اسم المستخدم' : 'Username'}<input value={userForm.username} onChange={(event) => setUserForm((form) => ({ ...form, username: event.target.value }))} required minLength={3} maxLength={40} /></label><label>{lang === 'ar' ? 'الاسم الظاهر' : 'Display name'}<input value={userForm.displayName} onChange={(event) => setUserForm((form) => ({ ...form, displayName: event.target.value }))} required /></label><label>{lang === 'ar' ? 'كلمة المرور المؤقتة (12 حرفًا على الأقل)' : 'Temporary password (at least 12 characters)'}<input type="password" value={userForm.password} onChange={(event) => setUserForm((form) => ({ ...form, password: event.target.value }))} required minLength={12} autoComplete="new-password" /></label><label>{lang === 'ar' ? 'الدور' : 'Role'}<select value={userForm.roleCode} onChange={(event) => setUserForm((form) => ({ ...form, roleCode: event.target.value }))}><option value="cashier">{lang === 'ar' ? 'كاشير' : 'Cashier'}</option><option value="manager">{lang === 'ar' ? 'مدير' : 'Manager'}</option></select></label><div className="auth-helper">{lang === 'ar' ? `عدد المستخدمين النشطين: ${users.filter((user) => user.isActive).length}${licenseStatus?.limits.max_users ? ` / ${licenseStatus.limits.max_users}` : ''}. كلمة المرور تُهشّ بـ Argon2id داخل Rust.` : `Active users: ${users.filter((user) => user.isActive).length}${licenseStatus?.limits.max_users ? ` / ${licenseStatus.limits.max_users}` : ''}. Passwords are Argon2id-hashed in Rust.`}</div><button className="auth-submit" type="submit" disabled={workspaceBusy}>{lang === 'ar' ? 'إنشاء المستخدم' : 'Create user'}<Icon name="check" size={16} /></button></form>
               <section className="module-card"><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'الكاشير لا يدير المستخدمين' : 'Cashiers cannot administer users'}</span><h2>{lang === 'ar' ? 'حسابات الفريق' : 'Team accounts'}</h2></div></div><div className="module-product-list">{users.map((user) => <div className="module-product-row user-row" key={user.id}><div className="avatar">{user.displayName.slice(0, 1)}</div><div><strong>{user.displayName} · {user.username}</strong><small>{user.roleCode} · {user.isActive ? (lang === 'ar' ? 'نشط' : 'Active') : (lang === 'ar' ? 'موقوف' : 'Inactive')}</small></div><select aria-label={lang === 'ar' ? 'الدور' : 'Role'} value={user.roleCode} disabled={user.roleCode === 'owner' || workspaceBusy} onChange={(event) => void changeUserRole(user.id, event.target.value)}><option value="owner">owner</option><option value="cashier">cashier</option><option value="manager">manager</option></select><button className="filter-button" disabled={user.roleCode === 'owner' || workspaceBusy} onClick={() => void toggleUserActive(user)}>{user.isActive ? (lang === 'ar' ? 'إيقاف' : 'Disable') : (lang === 'ar' ? 'تفعيل' : 'Enable')}</button></div>)}{users.length === 0 && <div className="empty-table">{lang === 'ar' ? 'لا توجد حسابات محلية.' : 'No local accounts.'}</div>}</div><div className="auth-helper">{lang === 'ar' ? 'لا يمكن إيقاف المالك الأخير. المدير لا يملك صلاحية إدارة المستخدمين.' : 'The last active owner cannot be disabled. Managers cannot manage user accounts.'}</div></section>
             </div>}
+            {activeTab === 'users' && <div className="module-grid">
+              <section className="module-card module-form">
+                <div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'برنامج اختياري' : 'Optional programme'}</span><h2>{lang === 'ar' ? 'نقاط الولاء' : 'Loyalty points'}</h2></div><div className="stat-icon mint"><Icon name="tag" /></div></div>
+                <div className="tax-choice"><button type="button" className={loyaltyForm.enabled ? 'chosen' : ''} onClick={() => setLoyaltyForm((form) => ({ ...form, enabled: true }))}>{lang === 'ar' ? 'مفعّل' : 'Enabled'}</button><button type="button" className={!loyaltyForm.enabled ? 'chosen' : ''} onClick={() => setLoyaltyForm((form) => ({ ...form, enabled: false }))}>{lang === 'ar' ? 'موقوف' : 'Off'}</button></div>
+                <div className="module-fields-two">
+                  <label>{lang === 'ar' ? 'نقاط لكل ١ ج.م' : 'Points per 1 EGP'}<input type="number" min="0" max="1000" step="1" value={loyaltyForm.pointsPerCurrencyUnit} onChange={(event) => setLoyaltyForm((form) => ({ ...form, pointsPerCurrencyUnit: event.target.value }))} /></label>
+                  <label>{lang === 'ar' ? 'قيمة النقطة (ج.م)' : 'Point value (EGP)'}<input type="number" min="0" max="1000" step="0.01" value={loyaltyForm.redeemValue} onChange={(event) => setLoyaltyForm((form) => ({ ...form, redeemValue: event.target.value }))} /></label>
+                </div>
+                <label>{lang === 'ar' ? 'أقل عدد نقاط للاستبدال' : 'Minimum points to redeem'}<input type="number" min="0" step="1" value={loyaltyForm.minRedeemPoints} onChange={(event) => setLoyaltyForm((form) => ({ ...form, minRedeemPoints: event.target.value }))} /></label>
+                <button className="auth-submit" type="button" disabled={workspaceBusy} onClick={() => void saveLoyaltySettings()}>{lang === 'ar' ? 'حفظ إعدادات الولاء' : 'Save loyalty settings'}<Icon name="check" size={16} /></button>
+                {!loyaltySettings.isEnabled && <small className="auth-helper">{lang === 'ar' ? 'البرنامج موقوف افتراضيًا ولا تُسجَّل نقاط.' : 'The programme is off by default and no points are recorded.'}</small>}
+              </section>
+              <section className="module-card">
+                <div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'نقاط ورصيد' : 'Points and balance'}</span><h2>{lang === 'ar' ? 'رصيد العميل' : 'Customer balance'}</h2></div><div className="stat-icon lilac"><Icon name="user" /></div></div>
+                <label>{lang === 'ar' ? 'رقم هاتف العميل' : 'Customer phone'}<input value={loyaltyPhone} onChange={(event) => setLoyaltyPhone(event.target.value)} placeholder="01000000000" /></label>
+                <button className="filter-button" type="button" disabled={workspaceBusy || !loyaltyPhone.trim()} onClick={() => void lookupLoyalty()}>{lang === 'ar' ? 'بحث عن العميل' : 'Look up customer'}<Icon name="search" size={15} /></button>
+                {customerLoyalty && <div className="report-cards"><div><span>{lang === 'ar' ? 'النقاط' : 'Points'}</span><strong>{customerLoyalty.points}</strong></div><div><span>{lang === 'ar' ? 'قيمتها' : 'Value'}</span><strong>{money(customerLoyalty.valueMinor, lang)}</strong></div></div>}
+                {storeCredits.length > 0 && <div className="module-product-list">{storeCredits.map((credit) => <div className="module-product-row" key={credit.id}><div className="stat-icon mint"><Icon name="wallet" size={16} /></div><div><strong>{credit.remainingMinor > 0 ? money(credit.remainingMinor, lang) : (lang === 'ar' ? 'مستخدم بالكامل' : 'Fully used')}</strong><small>{lang === 'ar' ? 'أُصدر' : 'Issued'} {new Date(credit.createdAt).toLocaleDateString(lang === 'ar' ? 'ar-EG' : 'en-GB')} · {money(credit.issuedMinor, lang)}</small></div></div>)}</div>}
+              </section>
+            </div>}
+
             {activeTab === 'branches' && <div className="module-grid">
               <form className="module-card module-form" onSubmit={createBranch}><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'حد الرخصة' : 'License limit'}</span><h2>{lang === 'ar' ? 'إنشاء فرع' : 'Create a branch'}</h2></div><div className="stat-icon lilac"><Icon name="branch" /></div></div><div className="auth-helper">{lang === 'ar' ? `الفروع المستخدمة: ${branches.length}${licenseStatus?.limits.max_branches ? ` / ${licenseStatus.limits.max_branches}` : ''}. سيُنسخ إعداد المقاسات والألوان والفئات من الفرع النشط.` : `Branches used: ${branches.length}${licenseStatus?.limits.max_branches ? ` / ${licenseStatus.limits.max_branches}` : ''}. Sizes, colors, and categories are copied from the active branch.`}</div><label>{lang === 'ar' ? 'رمز الفرع' : 'Branch code'}<input value={branchForm.code} onChange={(event) => setBranchForm((form) => ({ ...form, code: event.target.value.toUpperCase() }))} minLength={2} maxLength={16} required /></label><div className="module-fields-two"><label>{lang === 'ar' ? 'اسم الفرع بالعربية' : 'Arabic branch name'}<input value={branchForm.nameAr} onChange={(event) => setBranchForm((form) => ({ ...form, nameAr: event.target.value }))} required /></label><label>{lang === 'ar' ? 'اسم الفرع بالإنجليزية' : 'English branch name'}<input value={branchForm.nameEn} onChange={(event) => setBranchForm((form) => ({ ...form, nameEn: event.target.value }))} required /></label></div><button className="auth-submit" type="submit" disabled={workspaceBusy}>{lang === 'ar' ? 'إنشاء الفرع' : 'Create branch'}<Icon name="check" size={16} /></button></form>
               <section className="module-card"><div className="module-card-head"><div><span className="modal-eyebrow">{branches.length} {lang === 'ar' ? 'فروع متاحة لحسابك' : 'branches assigned to you'}</span><h2>{lang === 'ar' ? 'الفروع' : 'Branches'}</h2></div></div><div className="module-product-list">{branches.map((branch) => <div className="module-product-row" key={branch.id}><div className="stat-icon mint"><Icon name="branch" size={16} /></div><div><strong>{branch.code} · {lang === 'ar' ? branch.nameAr : branch.nameEn}</strong><small>{branch.id === activeBranchId ? (lang === 'ar' ? 'الفرع النشط' : 'Active branch') : (lang === 'ar' ? 'متاح للتبديل' : 'Available')}</small></div><button className="filter-button" disabled={branch.id === activeBranchId || workspaceBusy} onClick={() => void changeBranch(branch.id)}>{lang === 'ar' ? 'فتح' : 'Switch'}</button></div>)}</div></section>
               <form className="module-card module-form" onSubmit={assignUserToBranch}><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'مدير الفرع فقط' : 'Branch-owner only'}</span><h2>{lang === 'ar' ? 'إسناد موظف لفرع' : 'Assign staff to a branch'}</h2></div><div className="stat-icon peach"><Icon name="user" /></div></div><label>{lang === 'ar' ? 'الفرع' : 'Branch'}<select value={branchAssignment.branchId} onChange={(event) => setBranchAssignment((form) => ({ ...form, branchId: event.target.value }))} required><option value="">—</option>{branches.map((branch) => <option key={branch.id} value={branch.id}>{branch.code} · {lang === 'ar' ? branch.nameAr : branch.nameEn}</option>)}</select></label><label>{lang === 'ar' ? 'المستخدم' : 'User'}<select value={branchAssignment.userId} onChange={(event) => setBranchAssignment((form) => ({ ...form, userId: event.target.value }))} required><option value="">—</option>{users.filter((user) => user.isActive && user.roleCode !== 'owner').map((user) => <option key={user.id} value={user.id}>{user.displayName} · {user.username}{user.roleCode ? ` · ${user.roleCode}` : ''}</option>)}</select></label><label>{lang === 'ar' ? 'الدور في الفرع' : 'Role in branch'}<select value={branchAssignment.roleCode} onChange={(event) => setBranchAssignment((form) => ({ ...form, roleCode: event.target.value }))}><option value="cashier">{lang === 'ar' ? 'كاشير' : 'Cashier'}</option><option value="manager">{lang === 'ar' ? 'مدير' : 'Manager'}</option></select></label><button className="auth-submit" type="submit" disabled={workspaceBusy || !users.some((user) => user.isActive && user.roleCode !== 'owner')}>{lang === 'ar' ? 'حفظ الإسناد' : 'Save assignment'}<Icon name="check" size={16} /></button></form>
             </div>}
+            {activeTab === 'imports' && <div className="module-grid">
+              <section className="module-card module-form">
+                <div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'لا شيء يُكتب قبل الاعتماد' : 'Nothing is written before approval'}</span><h2>{lang === 'ar' ? 'ملف البضاعة الافتتاحية' : 'Opening inventory file'}</h2></div><div className="stat-icon lilac"><Icon name="boxes" /></div></div>
+                <p className="auth-helper">{lang === 'ar' ? 'الأعمدة المقبولة: اسم الصنف، الفئة، السعر، التكلفة، المقاس، اللون، الكود، الباركود، الرصيد. الملف يبقى على جهازك ولا يُرسل لأي خدمة.' : 'Accepted columns: item name, category, price, cost, size, color, SKU, barcode, quantity. The file stays on this machine and is never uploaded.'}</p>
+                <input ref={importFileRef} type="file" accept=".csv,.xlsx" disabled={workspaceBusy} onChange={(event) => void chooseImportFile(event.target.files?.[0] ?? null)} />
+                {importPreview && (
+                  <div className="import-preview">
+                    <div className="report-cards">
+                      <div><span>{lang === 'ar' ? 'إجمالي الأسطر' : 'Total rows'}</span><strong>{importPreview.totalRows}</strong></div>
+                      <div><span>{lang === 'ar' ? 'مقبول' : 'Accepted'}</span><strong>{importPreview.acceptedRows}</strong></div>
+                      <div><span>{lang === 'ar' ? 'مرفوض' : 'Rejected'}</span><strong>{importPreview.rejectedRows}</strong></div>
+                    </div>
+                    {importPreview.errors.length > 0 && <div className="auth-warning">{importPreview.errors.slice(0, 8).map((error) => <div key={`${error.rowNumber}-${error.code}`}>{describeImportError(error.code, error.rowNumber)}</div>)}{importPreview.errors.length > 8 && <div>{lang === 'ar' ? `و${importPreview.errors.length - 8} خطأ آخر` : `and ${importPreview.errors.length - 8} more`}</div>}</div>}
+                    <div className="module-product-list">{importPreview.accepted.slice(0, 6).map((row) => <div className="module-product-row" key={`${row.rowNumber}-${row.sku}`}><div><strong>{row.nameAr} · {row.sizeCode} / {row.color}</strong><small>{row.sku} · {money(row.priceMinor, lang)} · {row.openingQty} {t.units}</small></div></div>)}{importPreview.accepted.length > 6 && <div className="empty-table">{lang === 'ar' ? `و${importPreview.accepted.length - 6} سطرًا آخر` : `and ${importPreview.accepted.length - 6} more rows`}</div>}</div>
+                    <button className="auth-submit" type="button" disabled={workspaceBusy || importPreview.acceptedRows === 0} onClick={() => void approveImport()}>{lang === 'ar' ? 'اعتماد الاستيراد وكتابة البيانات' : 'Approve and write the import'}<Icon name="check" size={16} /></button>
+                  </div>
+                )}
+                {importResult && <div className="auth-helper">{lang === 'ar' ? `تم إنشاء ${importResult.productsCreated} صنفًا و${importResult.variantsCreated} متغيرًا و${importResult.stockMovements} حركة مخزون.` : `Created ${importResult.productsCreated} products, ${importResult.variantsCreated} variants, and ${importResult.stockMovements} stock movements.`}</div>}
+              </section>
+              <section className="module-card">
+                <div className="module-card-head"><div><span className="modal-eyebrow">{importBatches.length} {lang === 'ar' ? 'دفعة' : 'batches'}</span><h2>{lang === 'ar' ? 'سجل الاستيراد' : 'Import history'}</h2></div><button className="filter-button" onClick={() => void openWorkspaceTab('imports')}>{lang === 'ar' ? 'تحديث' : 'Refresh'}<Icon name="clock" size={15} /></button></div>
+                <div className="module-product-list">{importBatches.map((batch) => <div className="module-product-row" key={batch.id}><div className={`stat-icon ${batch.status === 'COMMITTED' ? 'mint' : 'peach'}`}><Icon name="box" size={16} /></div><div><strong>{batch.sourceKind} · {batch.status}</strong><small>{batch.acceptedRows} {lang === 'ar' ? 'مقبول' : 'accepted'} · {batch.rejectedRows} {lang === 'ar' ? 'مرفوض' : 'rejected'} · {new Date(batch.createdAt).toLocaleString(lang === 'ar' ? 'ar-EG' : 'en-GB')}</small></div></div>)}{importBatches.length === 0 && <div className="empty-table">{lang === 'ar' ? 'لا يوجد استيراد سابق.' : 'No imports yet.'}</div>}</div>
+              </section>
+            </div>}
+
             {activeTab === 'backup' && <div className="module-grid backup-grid">
               <form className="module-card module-form" onSubmit={createBackup}><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'تشفير بكلمة مرور' : 'Passphrase encryption'}</span><h2>{lang === 'ar' ? 'إنشاء نسخة احتياطية' : 'Create encrypted backup'}</h2></div><div className="stat-icon mint"><Icon name="backup" /></div></div><div className="auth-warning">{lang === 'ar' ? 'أدخل مسارًا مطلقًا لملف .bkz. كلمة المرور لا تُحفظ؛ احتفظ بها منفصلة عن ملف النسخة.' : 'Enter an absolute .bkz path. The password is never stored; keep it separate from the backup file.'}</div><label>{lang === 'ar' ? 'مسار الحفظ' : 'Destination path'}<input className="mono" value={backupForm.destinationPath} onChange={(event) => setBackupForm((form) => ({ ...form, destinationPath: event.target.value }))} placeholder="E:\\NaseejPOS\\backup.bkz" required /></label><label>{lang === 'ar' ? 'نوع الوجهة' : 'Destination type'}<select value={backupForm.destinationKind} onChange={(event) => setBackupForm((form) => ({ ...form, destinationKind: event.target.value }))}><option value="LOCAL">{lang === 'ar' ? 'قرص محلي' : 'Local disk'}</option><option value="USB">USB</option><option value="EXTERNAL">{lang === 'ar' ? 'قرص خارجي' : 'External drive'}</option></select></label><label>{lang === 'ar' ? 'كلمة مرور النسخة (12 حرفًا على الأقل)' : 'Backup password (at least 12 characters)'}<input type="password" minLength={12} value={backupForm.password} onChange={(event) => setBackupForm((form) => ({ ...form, password: event.target.value }))} autoComplete="new-password" required /></label><button className="auth-submit" type="submit" disabled={workspaceBusy}>{lang === 'ar' ? 'تشفير وحفظ النسخة' : 'Encrypt and save backup'}<Icon name="backup" size={16} /></button></form>
               <form className="module-card module-form" onSubmit={restoreBackup}><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'تحقق قبل الاستبدال' : 'Validated before replacement'}</span><h2>{lang === 'ar' ? 'استعادة نسخة' : 'Restore backup'}</h2></div><div className="stat-icon peach"><Icon name="backup" /></div></div><div className="auth-warning">{lang === 'ar' ? 'تُرفض النسخ الخاطئة أو المتلاعب بها، ويُنشأ ملف حماية مشفّر قبل استبدال قاعدة البيانات.' : 'Corrupt or tampered files are rejected. A protected encrypted backup is created before replacing the live database.'}</div><label>{lang === 'ar' ? 'مسار ملف .bkz' : '.bkz file path'}<input className="mono" value={restoreForm.sourcePath} onChange={(event) => setRestoreForm((form) => ({ ...form, sourcePath: event.target.value }))} placeholder="E:\\NaseejPOS\\backup.bkz" required /></label><label>{lang === 'ar' ? 'كلمة مرور النسخة' : 'Backup password'}<input type="password" value={restoreForm.password} onChange={(event) => setRestoreForm((form) => ({ ...form, password: event.target.value }))} autoComplete="current-password" required /></label><button className="auth-submit danger-submit" type="submit" disabled={workspaceBusy}>{lang === 'ar' ? 'تحقق واستعد' : 'Verify and restore'}<Icon name="backup" size={16} /></button></form>
@@ -1468,8 +1673,8 @@ function App() {
                 })}{returnableInvoice.lines.length === 0 && <div className="empty-table">{lang === 'ar' ? 'لا توجد بنود قابلة للإرجاع.' : 'No returnable lines.'}</div>}</div>}</section>
               </div>
               {returnableInvoice && <div className="module-grid returns-settlement-grid">
-                <section className="module-card module-form"><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'تطابق سياسة المتجر' : 'Store policy enforced'}</span><h2>{lang === 'ar' ? 'تسوية المرتجع' : 'Return settlement'}</h2></div><div className="stat-icon mint"><Icon name="tag" /></div></div><label>{lang === 'ar' ? 'سبب الإرجاع (إلزامي)' : 'Return reason (required)'}<textarea rows={3} value={returnReason} onChange={(event) => setReturnReason(event.target.value)} /></label><label>{lang === 'ar' ? 'وسيلة رد المبلغ' : 'Refund method'}<select value={refundMethod} onChange={(event) => setRefundMethod(event.target.value)}><option value="CASH">{lang === 'ar' ? 'نقدي' : 'Cash'}</option><option value="CARD">{lang === 'ar' ? 'بطاقة' : 'Card'}</option><option value="WALLET">{lang === 'ar' ? 'محفظة' : 'Wallet'}</option></select></label><div className="return-total-box"><span>{lang === 'ar' ? 'قيمة البنود المختارة' : 'Selected returned value'}</span><strong>{money(returnedValueMinor, lang)}</strong></div><button className="auth-submit" type="button" disabled={workspaceBusy || !selectedReturnLines.length} onClick={() => void postReturn()}>{lang === 'ar' ? 'تسجيل المرتجع ورد قيمته' : 'Post return and refund'}<Icon name="check" size={16} /></button></section>
-                <section className="module-card module-form"><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'معاملة ذرية واحدة' : 'One atomic transaction'}</span><h2>{lang === 'ar' ? 'استبدال بصنف آخر' : 'Exchange for another item'}</h2></div><div className="stat-icon lilac"><Icon name="return" /></div></div><label>{lang === 'ar' ? 'الصنف / المتغير البديل' : 'Replacement variant'}<select value={exchangeVariantId} onChange={(event) => setExchangeVariantId(event.target.value)}><option value="">—</option>{catalogItems.flatMap((product) => product.variants.map((variant) => <option key={variant.id} value={variant.id}>{variant.sku} · {lang === 'ar' ? product.nameAr : product.nameEn} · {variant.size} / {variant.colorEn} · {money(variant.priceMinor, lang)}</option>))}</select></label><label>{lang === 'ar' ? 'كمية الصنف البديل' : 'Replacement quantity'}<input type="number" min="1" max="10000" step="1" value={exchangeQuantity} onChange={(event) => setExchangeQuantity(event.target.value)} /></label><div className="return-total-box"><span>{exchangeDifference > 0 ? (lang === 'ar' ? 'المطلوب تحصيله' : 'Amount to collect') : exchangeDifference < 0 ? (lang === 'ar' ? 'المطلوب رده' : 'Amount to refund') : (lang === 'ar' ? 'فرق السعر' : 'Price difference')}</span><strong>{money(Math.abs(exchangeDifference), lang)}{exchangeDifference > 0 ? ' +' : exchangeDifference < 0 ? ' −' : ''}</strong></div><div className="module-fields-two"><label>{lang === 'ar' ? 'وسيلة التحصيل' : 'Collection method'}<select value={exchangePaymentMethod} onChange={(event) => setExchangePaymentMethod(event.target.value)}><option value="CASH">{lang === 'ar' ? 'نقدي' : 'Cash'}</option><option value="CARD">{lang === 'ar' ? 'بطاقة' : 'Card'}</option><option value="WALLET">{lang === 'ar' ? 'محفظة' : 'Wallet'}</option></select></label><label>{lang === 'ar' ? 'وسيلة الرد' : 'Refund method'}<select value={exchangeRefundMethod} onChange={(event) => setExchangeRefundMethod(event.target.value)}><option value="CASH">{lang === 'ar' ? 'نقدي' : 'Cash'}</option><option value="CARD">{lang === 'ar' ? 'بطاقة' : 'Card'}</option><option value="WALLET">{lang === 'ar' ? 'محفظة' : 'Wallet'}</option></select></label></div><button className="auth-submit" type="button" disabled={workspaceBusy || !selectedReturnLines.length || !exchangeVariantId} onClick={() => void postExchange()}>{lang === 'ar' ? 'تنفيذ الاستبدال وإصدار فاتورة' : 'Complete exchange and issue invoice'}<Icon name="check" size={16} /></button></section>
+                <section className="module-card module-form"><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'تطابق سياسة المتجر' : 'Store policy enforced'}</span><h2>{lang === 'ar' ? 'تسوية المرتجع' : 'Return settlement'}</h2></div><div className="stat-icon mint"><Icon name="tag" /></div></div><label>{lang === 'ar' ? 'سبب الإرجاع (إلزامي)' : 'Return reason (required)'}<textarea rows={3} value={returnReason} onChange={(event) => setReturnReason(event.target.value)} /></label><label>{lang === 'ar' ? 'وسيلة رد المبلغ' : 'Refund method'}<select value={refundMethod} onChange={(event) => setRefundMethod(event.target.value)}><option value="CASH">{lang === 'ar' ? 'نقدي' : 'Cash'}</option><option value="CARD">{lang === 'ar' ? 'بطاقة' : 'Card'}</option><option value="WALLET">{lang === 'ar' ? 'محفظة' : 'Wallet'}</option><option value="STORE_CREDIT">{lang === 'ar' ? 'رصيد للعميل' : 'Store credit'}</option></select></label><div className="return-total-box"><span>{lang === 'ar' ? 'قيمة البنود المختارة' : 'Selected returned value'}</span><strong>{money(returnedValueMinor, lang)}</strong></div><button className="auth-submit" type="button" disabled={workspaceBusy || !selectedReturnLines.length} onClick={() => void postReturn()}>{lang === 'ar' ? 'تسجيل المرتجع ورد قيمته' : 'Post return and refund'}<Icon name="check" size={16} /></button></section>
+                <section className="module-card module-form"><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'معاملة ذرية واحدة' : 'One atomic transaction'}</span><h2>{lang === 'ar' ? 'استبدال بصنف آخر' : 'Exchange for another item'}</h2></div><div className="stat-icon lilac"><Icon name="return" /></div></div><label>{lang === 'ar' ? 'الصنف / المتغير البديل' : 'Replacement variant'}<select value={exchangeVariantId} onChange={(event) => setExchangeVariantId(event.target.value)}><option value="">—</option>{catalogItems.flatMap((product) => product.variants.map((variant) => <option key={variant.id} value={variant.id}>{variant.sku} · {lang === 'ar' ? product.nameAr : product.nameEn} · {variant.size} / {variant.colorEn} · {money(variant.priceMinor, lang)}</option>))}</select></label><label>{lang === 'ar' ? 'كمية الصنف البديل' : 'Replacement quantity'}<input type="number" min="1" max="10000" step="1" value={exchangeQuantity} onChange={(event) => setExchangeQuantity(event.target.value)} /></label><div className="return-total-box"><span>{exchangeDifference > 0 ? (lang === 'ar' ? 'المطلوب تحصيله' : 'Amount to collect') : exchangeDifference < 0 ? (lang === 'ar' ? 'المطلوب رده' : 'Amount to refund') : (lang === 'ar' ? 'فرق السعر' : 'Price difference')}</span><strong>{money(Math.abs(exchangeDifference), lang)}{exchangeDifference > 0 ? ' +' : exchangeDifference < 0 ? ' −' : ''}</strong></div><div className="module-fields-two"><label>{lang === 'ar' ? 'وسيلة التحصيل' : 'Collection method'}<select value={exchangePaymentMethod} onChange={(event) => setExchangePaymentMethod(event.target.value)}><option value="CASH">{lang === 'ar' ? 'نقدي' : 'Cash'}</option><option value="CARD">{lang === 'ar' ? 'بطاقة' : 'Card'}</option><option value="WALLET">{lang === 'ar' ? 'محفظة' : 'Wallet'}</option></select></label><label>{lang === 'ar' ? 'وسيلة الرد' : 'Refund method'}<select value={exchangeRefundMethod} onChange={(event) => setExchangeRefundMethod(event.target.value)}><option value="CASH">{lang === 'ar' ? 'نقدي' : 'Cash'}</option><option value="CARD">{lang === 'ar' ? 'بطاقة' : 'Card'}</option><option value="WALLET">{lang === 'ar' ? 'محفظة' : 'Wallet'}</option><option value="STORE_CREDIT">{lang === 'ar' ? 'رصيد للعميل' : 'Store credit'}</option></select></label></div><button className="auth-submit" type="button" disabled={workspaceBusy || !selectedReturnLines.length || !exchangeVariantId} onClick={() => void postExchange()}>{lang === 'ar' ? 'تنفيذ الاستبدال وإصدار فاتورة' : 'Complete exchange and issue invoice'}<Icon name="check" size={16} /></button></section>
               </div>}
             </>}
             {activeTab === 'reports' && <div className="module-card report-module"><div className="module-card-head"><div><span className="modal-eyebrow">{lang === 'ar' ? 'تحكم بالصلاحيات' : 'Permission-gated data'}</span><h2>{lang === 'ar' ? 'ملخص الفترة' : 'Period summary'}</h2></div><div className="stat-icon lilac"><Icon name="chart" /></div></div><div className="module-fields-two"><label>{lang === 'ar' ? 'من' : 'From'}<input type="date" value={reportRange.from} onChange={(event) => setReportRange((range) => ({ ...range, from: event.target.value }))} /></label><label>{lang === 'ar' ? 'إلى' : 'To'}<input type="date" value={reportRange.to} onChange={(event) => setReportRange((range) => ({ ...range, to: event.target.value }))} /></label></div><button className="auth-submit report-load" onClick={() => void loadReports()} disabled={workspaceBusy}>{lang === 'ar' ? 'تحميل التقرير' : 'Load report'}<Icon name="chart" size={16} /></button>{salesSummary && <div className="report-cards"><div><span>{lang === 'ar' ? 'الفواتير' : 'Invoices'}</span><strong>{salesSummary.invoiceCount}</strong></div><div><span>{lang === 'ar' ? 'الإجمالي' : 'Sales'}</span><strong>{money(salesSummary.grossMinor, lang)}</strong></div><div><span>{lang === 'ar' ? 'الخصومات' : 'Discounts'}</span><strong>{money(salesSummary.discountsMinor, lang)}</strong></div><div><span>{lang === 'ar' ? 'المرتجعات' : 'Returns'}</span><strong>{money(salesSummary.returnsMinor, lang)}</strong></div><div className="report-net"><span>{lang === 'ar' ? 'صافي المبيعات' : 'Net sales'}</span><strong>{money(salesSummary.netMinor, lang)}</strong></div><div><span>{lang === 'ar' ? 'الضريبة المسجلة' : 'Recorded tax'}</span><strong>{money(salesSummary.taxMinor, lang)}</strong></div></div>}{profitSummary && <div className="profit-strip"><div><span>{lang === 'ar' ? 'الإيراد دون الضريبة' : 'Net revenue'}</span><strong>{money(profitSummary.revenueMinor, lang)}</strong></div><div><span>{lang === 'ar' ? 'التكلفة المسجلة' : 'Recorded cost basis'}</span><strong>{money(profitSummary.costMinor, lang)}</strong></div><div><span>{lang === 'ar' ? 'مجمل الربح' : 'Gross profit'}</span><strong>{money(profitSummary.grossProfitMinor, lang)} · {(profitSummary.marginBps / 100).toFixed(1)}%</strong></div></div>}<div className="auth-helper">{lang === 'ar' ? 'التكلفة وهامش الربح لا يظهران إلا عند امتلاك صلاحية وتقنية الترخيص المناسبة. تكلفة التقرير تعتمد على تكلفة الوحدة المسجلة وقت البيع.' : 'Cost and margin are returned only with the required role and license feature. Cost reporting uses the unit cost snapshot recorded at sale time.'}</div></div>}

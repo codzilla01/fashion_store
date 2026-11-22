@@ -23,6 +23,8 @@ type SeasonRow = (String, String, String, Option<String>, Option<String>);
 pub struct AppStatus {
     pub needs_owner_setup: bool,
     pub tax_configuration_required: bool,
+    /// Whether the store currently charges tax. Optional by design.
+    pub tax_enabled: bool,
     pub tax_rate_bps: i64,
     pub prices_include_tax: Option<bool>,
 }
@@ -715,9 +717,13 @@ pub fn app_status(state: tauri::State<'_, AppState>) -> Result<AppStatus, String
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(db_error)?;
+    // Tax is optional: only a customer-facing VAT obligation makes it
+    // mandatory, so the app never blocks the first sale on a tax decision.
+    // The owner switches it on or off from the control panel at any time.
     Ok(AppStatus {
         needs_owner_setup: users == 0,
-        tax_configuration_required: tax_mode.is_none(),
+        tax_configuration_required: false,
+        tax_enabled: tax_rate_bps > 0,
         tax_rate_bps,
         prices_include_tax: tax_mode.map(|mode| mode == 1),
     })
@@ -1126,12 +1132,22 @@ pub fn create_sale(
             return Err("DISCOUNT_REASON_REQUIRED".to_string());
         }
     }
-    if request.payments.len() > 3
+    if request.payments.len() > 4
         || request.payments.iter().any(|p| {
-            p.amount_minor <= 0 || !matches!(p.method.as_str(), "CASH" | "CARD" | "WALLET")
+            p.amount_minor <= 0
+                || !matches!(
+                    p.method.as_str(),
+                    "CASH" | "CARD" | "WALLET" | "STORE_CREDIT"
+                )
         })
     {
         return Err("PAYMENT_LINES_INVALID".to_string());
+    }
+    // Store credit belongs to a customer, so it can only be used when the
+    // sale is attached to one.
+    if request.payments.iter().any(|p| p.method == "STORE_CREDIT") && request.customer_id.is_none()
+    {
+        return Err("STORE_CREDIT_REQUIRES_CUSTOMER".to_string());
     }
     let sale_request_hash = request_hash(&request)?;
 
@@ -1149,15 +1165,18 @@ pub fn create_sale(
         return Ok(SaleResult { invoice_id, invoice_no, total_minor });
     }
 
-    let (tax_rate_bps, prices_include_tax): (i64, Option<i64>) = tx
+    // Tax is optional. When the owner has switched it off for a branch the
+    // stored rate is zero; an unconfigured branch is treated as zero-rated
+    // instead of blocking the sale, so a store can start selling on day one.
+    let (stored_tax_rate_bps, prices_include_tax): (i64, Option<i64>) = tx
         .query_row(
             "SELECT tax_rate_bps, prices_include_tax FROM branches WHERE id=?1",
             [&session.branch_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(db_error)?;
-    let prices_include_tax =
-        prices_include_tax.ok_or_else(|| "TAX_CONFIGURATION_REQUIRED".to_string())?;
+    let tax_rate_bps = stored_tax_rate_bps.clamp(0, 10000);
+    let prices_include_tax = prices_include_tax.unwrap_or(0);
     if let Some(customer_id) = request.customer_id.as_deref() {
         let active: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM customers WHERE branch_id=?1 AND id=?2 AND is_active=1)",
             params![session.branch_id,customer_id],|row|row.get(0)).map_err(db_error)?;
@@ -1389,6 +1408,38 @@ pub fn create_sale(
             params![Uuid::new_v4().to_string(), session.branch_id, invoice_id, payment.method, payment.amount_minor,
                 format!("payment:{}:{}", invoice_id, index), now],
         ).map_err(db_error)?;
+    }
+
+    // Store credit is consumed only after the invoice is written, so the
+    // spend always points at a real invoice.
+    if let Some(customer_id) = request.customer_id.as_deref() {
+        let credit_total = request
+            .payments
+            .iter()
+            .filter(|payment| payment.method == "STORE_CREDIT")
+            .try_fold(0i64, |sum, payment| sum.checked_add(payment.amount_minor))
+            .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
+        if credit_total > 0 {
+            crate::loyalty::spend_store_credit(
+                &tx,
+                &session.branch_id,
+                customer_id,
+                &invoice_id,
+                credit_total,
+                &session.user_id,
+                &now,
+            )?;
+        }
+        // Loyalty is optional: when the programme is off this writes nothing.
+        crate::loyalty::award_points_for_invoice(
+            &tx,
+            &session.branch_id,
+            customer_id,
+            &invoice_id,
+            net_after_discounts,
+            &session.user_id,
+            &now,
+        )?;
     }
 
     let audit_id = Uuid::new_v4().to_string();
@@ -1849,7 +1900,7 @@ pub fn record_return(
             return Err("RETURN_ITEM_NOT_RESTOCKABLE".to_string());
         }
     }
-    if request.refunds.len() > 3
+    if request.refunds.len() > 4
         || request.refunds.iter().any(|payment| {
             payment.amount_minor <= 0
                 || !matches!(
@@ -2002,6 +2053,30 @@ pub fn record_return(
                 format!("return-refund:{}:{}",return_id,index),session.user_id,now],
         ).map_err(db_error)?;
     }
+    // Store credit is the approved default refund for a return. It is issued
+    // to the customer account, so a return without a customer can only be
+    // refunded by cash, card, or wallet.
+    let store_credit_total = request
+        .refunds
+        .iter()
+        .filter(|refund| refund.method == "STORE_CREDIT")
+        .try_fold(0i64, |sum, refund| sum.checked_add(refund.amount_minor))
+        .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
+    if store_credit_total > 0 {
+        if customer_id.is_none() {
+            return Err("STORE_CREDIT_REQUIRES_CUSTOMER".to_string());
+        }
+        crate::loyalty::issue_store_credit(
+            &tx,
+            &session.branch_id,
+            customer_id.as_deref(),
+            &return_id,
+            store_credit_total,
+            &session.user_id,
+            &now,
+        )?;
+    }
+
     let outstanding: bool = tx.query_row(
         "SELECT EXISTS(SELECT 1 FROM invoice_lines il LEFT JOIN
            (SELECT rl.original_invoice_line_id,SUM(rl.quantity) q FROM return_lines rl JOIN return_documents rd ON rd.branch_id=rl.branch_id AND rd.id=rl.return_document_id WHERE rd.branch_id=?1 AND rd.status='COMPLETED' GROUP BY rl.original_invoice_line_id) r
@@ -2021,6 +2096,16 @@ pub fn record_return(
         ],
     )
     .map_err(db_error)?;
+    if !outstanding {
+        // A fully returned sale must not leave earned points behind.
+        crate::loyalty::reverse_points_for_invoice(
+            &tx,
+            &session.branch_id,
+            &invoice_id,
+            &session.user_id,
+            &now,
+        )?;
+    }
     let details = serde_json::json!({"return_no":return_no,"refund_due_minor":refund_due_minor,"line_count":seen_lines.len()}).to_string();
     insert_audit(
         &tx,
@@ -2219,15 +2304,17 @@ pub fn create_exchange(
         return_snapshots.push((line, record.0, line_value));
     }
 
-    let (tax_rate_bps, prices_include_tax): (i64, Option<i64>) = tx
+    // Mirrors the sale path: a zero rate means tax is switched off, and an
+    // unconfigured branch is treated as zero-rated rather than blocking.
+    let (stored_tax_rate_bps, prices_include_tax): (i64, Option<i64>) = tx
         .query_row(
             "SELECT tax_rate_bps,prices_include_tax FROM branches WHERE id=?1",
             [&session.branch_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(db_error)?;
-    let prices_include_tax =
-        prices_include_tax.ok_or_else(|| "TAX_CONFIGURATION_REQUIRED".to_string())?;
+    let tax_rate_bps = stored_tax_rate_bps.clamp(0, 10000);
+    let prices_include_tax = prices_include_tax.unwrap_or(0);
     struct ReplacementSnapshot {
         input: SaleLineInput,
         sku: String,
@@ -3847,7 +3934,11 @@ pub fn sqlcipher_health(state: tauri::State<'_, AppState>) -> Result<String, Str
     Ok(version)
 }
 
-fn require_permission(state: &AppState, token: &str, permission: &str) -> Result<Session, String> {
+pub(crate) fn require_permission(
+    state: &AppState,
+    token: &str,
+    permission: &str,
+) -> Result<Session, String> {
     let license = crate::license::ensure_valid(state)?;
     crate::license::record_trusted_time(state, &license)?;
     let required_feature = match permission {
@@ -4082,7 +4173,8 @@ mod tax_policy_tests {
     #[test]
     fn tax_rounds_to_nearest_whole_egp() {
         // Minor units are piastres: 100 minor = 1 EGP.
-        assert_eq!(round_tax_to_policy(1_240), Ok(1_000));
+        // 12.40 EGP rounds down to 12, and 12.50 rounds up to 13.
+        assert_eq!(round_tax_to_policy(1_240), Ok(1_200));
         assert_eq!(round_tax_to_policy(1_250), Ok(1_300));
         assert_eq!(round_tax_to_policy(49), Ok(0));
         assert_eq!(round_tax_to_policy(50), Ok(100));
