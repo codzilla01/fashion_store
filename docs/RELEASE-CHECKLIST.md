@@ -9,7 +9,8 @@
 | المجال | الحالة | الدليل |
 |---|---|---|
 | بناء الواجهة | ✅ | `npm run build` ينجح في CI |
-| اختبارات المخطط | ✅ | 16 اختبارًا في `tests/test_schema_smoke.py` |
+| اختبارات المخطط | ✅ | 22 اختبارًا في `tests/test_schema_smoke.py` |
+| حساب الفاتورة والواجهة | ✅ | 15 اختبارًا في `npm test` (vitest + jsdom) |
 | بناء Rust + Clippy | ✅ | `cargo check` / `cargo fmt` / `cargo clippy` في CI |
 | SQLCipher وDPAPI على Windows | ✅ مُقاس | `cargo test --test windows_security` على `windows-latest` |
 | النسخ الاحتياطي `.bkz` | ✅ مُقاس | اختبار إنشاء/استعادة + كلمة مرور خاطئة مرفوضة |
