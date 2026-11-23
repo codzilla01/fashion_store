@@ -14,7 +14,8 @@ const MIGRATION_0003: &str = include_str!("../migrations/0003_local_trial_state.
 const MIGRATION_0004: &str = include_str!("../migrations/0004_owner_panel.sql");
 const MIGRATION_0005: &str = include_str!("../migrations/0005_clock_high_water.sql");
 const MIGRATION_0006: &str = include_str!("../migrations/0006_loyalty_and_imports.sql");
-pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+const MIGRATION_0007: &str = include_str!("../migrations/0007_immutable_documents.sql");
+pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 const BRANCH_ID: &str = "00000000-0000-4000-8000-000000000001";
 
 // The SQLCipher configuration
@@ -291,6 +292,26 @@ fn apply_migrations(mut connection: Connection) -> Result<Connection, String> {
             .commit()
             .map_err(|e| format!("MIGRATION_0006_COMMIT:{e}"))?;
         version = 6;
+    }
+    if version < 7 {
+        trace("migrations: applying migration 0007");
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Exclusive)
+            .map_err(|e| format!("MIGRATION_0007_BEGIN:{e}"))?;
+        transaction
+            .execute_batch(MIGRATION_0007)
+            .map_err(|e| format!("MIGRATION_0007:{e}"))?;
+        let digest = hex::encode(Sha256::digest(MIGRATION_0007.as_bytes()));
+        transaction
+            .execute(
+                "INSERT INTO schema_migrations(version, checksum, applied_at) VALUES(7, ?1, ?2)",
+                rusqlite::params![digest, Utc::now().to_rfc3339()],
+            )
+            .map_err(|e| format!("MIGRATION_0007_RECORD:{e}"))?;
+        transaction
+            .commit()
+            .map_err(|e| format!("MIGRATION_0007_COMMIT:{e}"))?;
+        version = 7;
     }
     if version != CURRENT_SCHEMA_VERSION {
         return Err("DB_MIGRATION_STATE_INVALID".to_string());

@@ -328,3 +328,70 @@ fn migrations_are_applied_once_and_are_idempotent_on_reopen() {
 
     fs::remove_dir_all(directory).ok();
 }
+
+/// A posted invoice is the record of a real sale.
+///
+/// The `.bkz` backup carries the whole encrypted file, so these guarantees must
+/// come from the schema itself and not from the application code: an operator
+/// with a SQLite console and the DPAPI key must not be able to rewrite a
+/// posted total, renumber an invoice, or delete the evidence of a sale.
+#[test]
+fn a_posted_invoice_cannot_be_rewritten_or_deleted() {
+    let directory = temp_dir("immutable");
+    let connection = db::open_database(&directory).expect("database opens");
+    let now = "2026-11-21T09:00:00Z";
+    let branch: String = connection
+        .query_row("SELECT id FROM branches LIMIT 1", [], |row| row.get(0))
+        .expect("the seeded branch exists");
+    connection
+        .execute(
+            "INSERT INTO users(id,username,display_name,password_phc,created_at,updated_at)
+             VALUES('immutable-owner','owner','Owner','phc',?1,?1)",
+            [now],
+        )
+        .expect("user inserted");
+    connection
+        .execute(
+            "INSERT INTO invoices(id,branch_id,invoice_no,idempotency_key,request_hash,cashier_user_id,status,
+             currency_code,tax_rate_bps,prices_include_tax,subtotal_minor,item_discount_minor,invoice_discount_minor,
+             tax_minor,total_minor,created_at)
+             VALUES('immutable-invoice',?1,'NS-20261121-0001','idem-00000001','hash','immutable-owner','COMPLETED',
+             'EGP',0,0,10000,0,0,0,10000,?2)",
+            naseej_pos::rusqlite::params![branch, now],
+        )
+        .expect("invoice inserted");
+
+    let rewrite_total = connection.execute(
+        "UPDATE invoices SET total_minor=1 WHERE id='immutable-invoice'",
+        [],
+    );
+    assert!(rewrite_total.is_err(), "a posted total must be immutable");
+
+    let renumber = connection.execute(
+        "UPDATE invoices SET invoice_no='NS-20260101-0001' WHERE id='immutable-invoice'",
+        [],
+    );
+    assert!(renumber.is_err(), "an invoice number must be immutable");
+
+    // Returns and voids still move the status forward.
+    connection
+        .execute(
+            "UPDATE invoices SET status='PARTIALLY_RETURNED' WHERE id='immutable-invoice'",
+            [],
+        )
+        .expect("a partial return is a legal transition");
+    connection
+        .execute(
+            "UPDATE invoices SET status='RETURNED' WHERE id='immutable-invoice'",
+            [],
+        )
+        .expect("completing the return is a legal transition");
+    let backwards = connection.execute(
+        "UPDATE invoices SET status='COMPLETED' WHERE id='immutable-invoice'",
+        [],
+    );
+    assert!(backwards.is_err(), "a returned invoice cannot go back to completed");
+
+    let deleted = connection.execute("DELETE FROM invoices WHERE id='immutable-invoice'", []);
+    assert!(deleted.is_err(), "an invoice must never be deleted");
+}

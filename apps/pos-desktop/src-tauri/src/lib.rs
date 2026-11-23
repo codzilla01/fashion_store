@@ -16,6 +16,7 @@ pub mod license;
 pub mod loyalty;
 pub mod owner_panel;
 pub mod printing;
+pub mod totals;
 pub mod webauthn;
 
 /// Re-exported so integration tests can query the encrypted database

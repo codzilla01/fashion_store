@@ -11,6 +11,7 @@ MIGRATION_3 = ROOT / "apps/pos-desktop/src-tauri/migrations/0003_local_trial_sta
 MIGRATION_4 = ROOT / "apps/pos-desktop/src-tauri/migrations/0004_owner_panel.sql"
 MIGRATION_5 = ROOT / "apps/pos-desktop/src-tauri/migrations/0005_clock_high_water.sql"
 MIGRATION_6 = ROOT / "apps/pos-desktop/src-tauri/migrations/0006_loyalty_and_imports.sql"
+MIGRATION_7 = ROOT / "apps/pos-desktop/src-tauri/migrations/0007_immutable_documents.sql"
 
 
 class SchemaSmokeTests(unittest.TestCase):
@@ -23,6 +24,7 @@ class SchemaSmokeTests(unittest.TestCase):
         self.db.executescript(MIGRATION_4.read_text(encoding="utf-8"))
         self.db.executescript(MIGRATION_5.read_text(encoding="utf-8"))
         self.db.executescript(MIGRATION_6.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_7.read_text(encoding="utf-8"))
         self.branch = "branch-test"
         self.user = "user-test"
         self.category = "category-test"
@@ -102,6 +104,7 @@ class SchemaSmokeTests(unittest.TestCase):
         self.db.executescript(MIGRATION_4.read_text(encoding="utf-8"))
         self.db.executescript(MIGRATION_5.read_text(encoding="utf-8"))
         self.db.executescript(MIGRATION_6.read_text(encoding="utf-8"))
+        self.db.executescript(MIGRATION_7.read_text(encoding="utf-8"))
         rows = {row[0]: bool(row[1]) for row in self.db.execute(
             "SELECT code,EXISTS(SELECT 1 FROM role_permissions rp WHERE rp.role_code=roles.code AND rp.permission_code='branches.manage') FROM roles")}
         self.assertFalse(rows["cashier"])
@@ -182,7 +185,7 @@ class OptionalTaxAndLoyaltyTests(unittest.TestCase):
     def setUp(self):
         self.db = sqlite3.connect(":memory:")
         self.db.execute("PRAGMA foreign_keys=ON")
-        for migration in (MIGRATION, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6):
+        for migration in (MIGRATION, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7):
             self.db.executescript(migration.read_text(encoding="utf-8"))
         self.now = "2026-11-21T09:00:00Z"
         self.branch = uuid.uuid4().hex
@@ -262,3 +265,77 @@ class OptionalTaxAndLoyaltyTests(unittest.TestCase):
                 "INSERT INTO clock_high_water(singleton,high_water_utc,updated_at) VALUES(2,?,?)",
                 (self.now, self.now),
             )
+
+
+class ImmutableDocumentTests(unittest.TestCase):
+    """A posted invoice is the record of a real sale; it must not be rewritable."""
+
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.db.execute("PRAGMA foreign_keys=ON")
+        for migration in (MIGRATION, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7):
+            self.db.executescript(migration.read_text(encoding="utf-8"))
+        self.now = "2026-11-21T09:00:00Z"
+        self.branch = "branch-immutable"
+        self.user = "user-immutable"
+        self.invoice = "invoice-immutable"
+        self.db.execute(
+            "INSERT INTO branches(id,code,name_ar,name_en,currency_code,tax_rate_bps,prices_include_tax,timezone,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
+            (self.branch, "MAIN", "فرع", "Main", "EGP", 0, 0, "Africa/Cairo", self.now),
+        )
+        self.db.execute(
+            "INSERT INTO users(id,username,display_name,password_phc,created_at,updated_at) VALUES(?,?,?,?,?,?)",
+            (self.user, "owner", "Owner", "phc", self.now, self.now),
+        )
+        self.db.execute(
+            "INSERT INTO invoices(id,branch_id,invoice_no,idempotency_key,request_hash,cashier_user_id,status,"
+            "currency_code,tax_rate_bps,prices_include_tax,subtotal_minor,item_discount_minor,invoice_discount_minor,"
+            "tax_minor,total_minor,created_at)"
+            " VALUES(?,?,?,?,?,?,'COMPLETED','EGP',0,0,?,0,0,0,?,?)",
+            (self.invoice, self.branch, "NS-20261121-0001", "idem-00000001", "hash", self.user, 10_000, 10_000, self.now),
+        )
+        self.db.commit()
+
+    def tearDown(self):
+        self.db.close()
+
+    def test_the_invoice_total_cannot_be_rewritten(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE invoices SET total_minor=1 WHERE id=?", (self.invoice,))
+
+    def test_the_invoice_number_and_tax_cannot_be_rewritten(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE invoices SET invoice_no='NS-20260101-0001' WHERE id=?", (self.invoice,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE invoices SET tax_minor=1400, tax_rate_bps=1400 WHERE id=?", (self.invoice,))
+
+    def test_a_completed_invoice_cannot_be_deleted(self):
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("DELETE FROM invoices WHERE id=?", (self.invoice,))
+
+    def test_the_return_transitions_are_allowed_but_not_reversed(self):
+        self.db.execute("UPDATE invoices SET status='PARTIALLY_RETURNED' WHERE id=?", (self.invoice,))
+        self.db.execute("UPDATE invoices SET status='RETURNED' WHERE id=?", (self.invoice,))
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE invoices SET status='COMPLETED' WHERE id=?", (self.invoice,))
+
+    def test_a_void_needs_a_completed_invoice(self):
+        self.db.execute("UPDATE invoices SET status='VOIDED' WHERE id=?", (self.invoice,))
+        self.db.commit()
+        self.assertEqual(
+            self.db.execute("SELECT status FROM invoices WHERE id=?", (self.invoice,)).fetchone()[0],
+            "VOIDED",
+        )
+
+    def test_a_return_document_cannot_be_rewritten_or_deleted(self):
+        self.db.execute(
+            "INSERT INTO return_documents(id,branch_id,return_no,original_invoice_id,customer_id,kind,status,"
+            "reason,refund_due_minor,created_by,created_at,idempotency_key,request_hash)"
+            " VALUES(?,?,?,?,NULL,'RETURN','COMPLETED',?,?,?,?,?,?)",
+            ("return-1", self.branch, "RT-20261121-0001", self.invoice, "changed mind", 10_000, self.user, self.now, "ret-idem-01", "hash"),
+        )
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("UPDATE return_documents SET refund_due_minor=1 WHERE id='return-1'")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.db.execute("DELETE FROM return_documents WHERE id='return-1'")
