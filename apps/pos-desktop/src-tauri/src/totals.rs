@@ -206,7 +206,10 @@ mod tests {
         assert!(allocate_exactly(&[], 100).is_err());
         assert!(allocate_exactly(&[0, 0], 100).is_err());
         assert!(allocate_exactly(&[1], -1).is_err());
-        assert!(allocate_exactly(&[1], 10).is_err());
+        // A negative weight is meaningless, but a single non-zero weight takes
+        // the whole amount.
+        assert!(allocate_exactly(&[-1], 10).is_err());
+        assert_eq!(allocate_exactly(&[1], 10), Ok(vec![10]));
         assert_eq!(allocate_exactly(&[], 0), Ok(Vec::new()));
     }
 }
