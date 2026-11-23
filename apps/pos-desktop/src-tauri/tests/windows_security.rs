@@ -390,7 +390,10 @@ fn a_posted_invoice_cannot_be_rewritten_or_deleted() {
         "UPDATE invoices SET status='COMPLETED' WHERE id='immutable-invoice'",
         [],
     );
-    assert!(backwards.is_err(), "a returned invoice cannot go back to completed");
+    assert!(
+        backwards.is_err(),
+        "a returned invoice cannot go back to completed"
+    );
 
     let deleted = connection.execute("DELETE FROM invoices WHERE id='immutable-invoice'", []);
     assert!(deleted.is_err(), "an invoice must never be deleted");
