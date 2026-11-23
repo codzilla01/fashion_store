@@ -35,6 +35,12 @@ jobs:
         working-directory: apps/pos-desktop
         run: npm run build
 
+      # The till previews totals in TypeScript and the backend recomputes them
+      # in Rust. These tests pin the shared rules so the two cannot drift.
+      - name: Test the POS invoice arithmetic
+        working-directory: apps/pos-desktop
+        run: npm test
+
       - name: Install activation tool dependencies
         working-directory: apps/activation-tool
         run: npm ci

@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import OwnerPanel from './OwnerPanel';
 import StoreDashboard, { type ManagerSection } from './StoreDashboard';
 import type { Lang } from './lang';
+import { computeInvoiceTotals, invoiceTax, invoiceTotal, settlePayments } from './totals';
 
 /** The two colour themes. The dark theme swaps the CSS custom properties. */
 type Theme = 'light' | 'dark';
@@ -91,7 +92,7 @@ const words = {
     customer: 'عميل اختياري', addCustomer: 'إضافة عميل', scanTip: 'الماسح جاهز',
     subtotal: 'الإجمالي قبل الخصم', discounts: 'الخصومات', tax: 'الضريبة (ضمن السعر)', total: 'الإجمالي المستحق',
     payment: 'طرق الدفع', addPayment: 'تقسيم الدفع', cash: 'نقدي', card: 'بطاقة', wallet: 'محفظة',
-    remaining: 'المتبقي', complete: 'إتمام البيع', print: 'طباعة آخر فاتورة',
+    remaining: 'المتبقي', changeDue: 'الباقي للعميل', complete: 'إتمام البيع', print: 'طباعة آخر فاتورة',
     chooseVariant: 'اختر المقاس واللون', size: 'المقاس', color: 'اللون', stock: 'المتاح', sku: 'SKU', barcode: 'باركود',
     addToCart: 'إضافة للسلة', cancel: 'إلغاء', new: 'جديد', low: 'كمية قليلة', best: 'الأكثر مبيعًا',
     cashier: 'الكاشير', shift: 'الوردية الصباحية', preview: 'معاينة تفاعلية',
@@ -112,7 +113,7 @@ const words = {
     customer: 'Optional customer', addCustomer: 'Add customer', scanTip: 'Scanner ready',
     subtotal: 'Subtotal before discount', discounts: 'Discounts', tax: 'Tax (included)', total: 'Amount due',
     payment: 'Payment methods', addPayment: 'Split payment', cash: 'Cash', card: 'Card', wallet: 'Wallet',
-    remaining: 'Remaining', complete: 'Complete sale', print: 'Print last receipt',
+    remaining: 'Remaining', changeDue: 'Change due', complete: 'Complete sale', print: 'Print last receipt',
     chooseVariant: 'Choose size and color', size: 'Size', color: 'Color', stock: 'In stock', sku: 'SKU', barcode: 'Barcode',
     addToCart: 'Add to cart', cancel: 'Cancel', new: 'New', low: 'Low stock', best: 'Best seller',
     cashier: 'Cashier', shift: 'Morning shift', preview: 'Interactive preview',
@@ -232,11 +233,6 @@ function Icon({ name, size = 18 }: { name: string; size?: number }) {
     message: 'M20 15a3 3 0 0 1-3 3H9l-5 3V7a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v8Z',
   };
   return <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d={paths[name] ?? paths.grid} /></svg>;
-}
-
-/** Approved policy: tax is rounded to the nearest whole EGP (100 piastres). */
-function roundTaxToPolicy(minor: number) {
-  return Math.round(minor / 100) * 100;
 }
 
 function money(minor: number, lang: Lang) {
@@ -508,18 +504,14 @@ function App() {
     }
   }
 
-  const totals = useMemo(() => {
-    const subtotal = cart.reduce((sum, line) => sum + line.variant.priceMinor * line.quantity, 0);
-    const itemDiscount = cart.reduce((sum, line) => sum + Math.round(line.variant.priceMinor * line.quantity * line.discountBps / 10000), 0);
-    const afterItemDiscount = Math.max(0, subtotal - itemDiscount);
-    const invoiceDiscount = Math.round(afterItemDiscount * invoiceDiscountBps / 10000);
-    const netAfterDiscount = Math.max(0, afterItemDiscount - invoiceDiscount);
-    const tax = roundTaxToPolicy(pricesIncludeTax
-      ? Math.round(netAfterDiscount * taxRateBps / (10000 + taxRateBps))
-      : Math.round(netAfterDiscount * taxRateBps / 10000));
-    const total = pricesIncludeTax ? netAfterDiscount : netAfterDiscount + tax;
-    return { subtotal, itemDiscount, invoiceDiscount, discount: itemDiscount + invoiceDiscount, total, tax };
-  }, [cart, invoiceDiscountBps, pricesIncludeTax, taxRateBps]);
+  // The preview and the posted invoice must agree to the piastre, so both use
+  // the same rules: see src/totals.ts and src-tauri/src/totals.rs.
+  const totals = useMemo(() => computeInvoiceTotals(
+    cart.map((line) => ({ priceMinor: line.variant.priceMinor, quantity: line.quantity, discountBps: line.discountBps })),
+    invoiceDiscountBps,
+    taxRateBps,
+    pricesIncludeTax,
+  ), [cart, invoiceDiscountBps, pricesIncludeTax, taxRateBps]);
 
   const paid = payments.reduce((sum, row) => sum + row.amountMinor, 0);
   const remaining = totals.total - paid;
@@ -538,8 +530,8 @@ function App() {
   const allVariants = catalogItems.flatMap((product) => product.variants);
   const exchangeVariant = allVariants.find((variant) => variant.id === exchangeVariantId);
   const exchangeSubtotal = exchangeVariant ? exchangeVariant.priceMinor * Math.max(0, Math.trunc(Number(exchangeQuantity) || 0)) : 0;
-  const exchangeTax = roundTaxToPolicy(pricesIncludeTax ? Math.round(exchangeSubtotal * taxRateBps / (10000 + taxRateBps)) : Math.round(exchangeSubtotal * taxRateBps / 10000));
-  const exchangeTotal = pricesIncludeTax ? exchangeSubtotal : exchangeSubtotal + exchangeTax;
+  const exchangeTax = invoiceTax(exchangeSubtotal, taxRateBps, pricesIncludeTax);
+  const exchangeTotal = invoiceTotal(exchangeSubtotal, exchangeTax, pricesIncludeTax);
   const exchangeDifference = exchangeTotal - returnedValueMinor;
 
   function stableReturnIdempotencyKey(payload: unknown) {
@@ -1246,10 +1238,16 @@ function App() {
     }
 
     try {
+      // The till settles the payments itself so the cashier sees the change
+      // before the sale is posted, using the same rule as the backend.
+      const settled = settlePayments(payments, totals.total);
       let invoiceNo = '';
+      // Cash tendered above the total is handed back, and the invoice is
+      // recorded at its total only.
+      let changeDue = settled.changeMinor;
       if (isTauri) {
         // Production command rechecks session, price, tax, stock and permissions in Rust.
-        const result = await invoke<{ invoiceNo: string; invoiceId?: string }>('create_sale', {
+        const result = await invoke<{ invoiceNo: string; invoiceId?: string; changeMinor?: number }>('create_sale', {
           sessionToken,
           request: {
             idempotency_key: crypto.randomUUID(),
@@ -1257,11 +1255,14 @@ function App() {
             lines: cart.map((line) => ({ variant_id: line.variant.id, quantity: line.quantity, item_discount_bps: line.discountBps })),
             invoice_discount_bps: invoiceDiscountBps,
             discount_reason: discountReason.trim() || null,
-            payments: payments.map((payment) => ({ method: payment.method, amount_minor: payment.amountMinor })),
+            payments: settled.applied.map((payment) => ({ method: payment.method, amount_minor: payment.amountMinor })),
           },
         });
         invoiceNo = result.invoiceNo;
         setLastInvoiceId(result.invoiceId ?? null);
+        if (result.changeMinor && result.changeMinor > 0) {
+          changeDue = result.changeMinor;
+        }
         await loadNativeCatalog(sessionToken);
       } else {
         // Browser preview intentionally demonstrates only the interaction flow; it does not persist a real sale.
@@ -1274,7 +1275,12 @@ function App() {
       setInvoiceDiscountBps(0);
       setDiscountReason('');
       setPayments([{ id: `pay-${Date.now()}`, method: 'CASH', amountMinor: 0 }]);
-      showNotice(`${t.saleDone} · ${invoiceNo}`, 'success');
+      showNotice(
+        changeDue > 0
+          ? `${t.saleDone} · ${invoiceNo} · ${t.changeDue} ${money(changeDue, lang)}`
+          : `${t.saleDone} · ${invoiceNo}`,
+        'success',
+      );
     } catch {
       showNotice('تعذر إتمام البيع. لم يتم تغيير المخزون؛ أعد المحاولة أو اتصل بالمدير.');
     }

@@ -1,3 +1,4 @@
+use crate::totals::{allocate_exactly, invoice_tax, invoice_total, rounded_ratio};
 use crate::{AppState, Session, db};
 use argon2::{Algorithm, Argon2, Params, Version};
 use chrono::{Local, Utc};
@@ -115,6 +116,9 @@ pub struct SaleResult {
     pub invoice_id: String,
     pub invoice_no: String,
     pub total_minor: i64,
+    /// Change handed back to the customer when cash was tendered above the
+    /// total. The invoice is always settled at `total_minor`.
+    pub change_minor: i64,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1143,6 +1147,20 @@ pub fn create_sale(
     {
         return Err("PAYMENT_LINES_INVALID".to_string());
     }
+    // A split payment settles its non-cash part exactly; any extra may only be
+    // cash, because that is the only method that can hand change back.
+    let settled_before_cash = request
+        .payments
+        .iter()
+        .filter(|p| p.method != "CASH")
+        .try_fold(0i64, |sum, p| sum.checked_add(p.amount_minor))
+        .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
+    let cash_tendered = request
+        .payments
+        .iter()
+        .filter(|p| p.method == "CASH")
+        .try_fold(0i64, |sum, p| sum.checked_add(p.amount_minor))
+        .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
     // Store credit belongs to a customer, so it can only be used when the
     // sale is attached to one.
     if request.payments.iter().any(|p| p.method == "STORE_CREDIT") && request.customer_id.is_none()
@@ -1162,7 +1180,12 @@ pub fn create_sale(
     ).optional().map_err(db_error)? {
         if stored_hash!=sale_request_hash { return Err("IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST".to_string()); }
         tx.commit().map_err(db_error)?;
-        return Ok(SaleResult { invoice_id, invoice_no, total_minor });
+        return Ok(SaleResult {
+            invoice_id,
+            invoice_no,
+            total_minor,
+            change_minor: 0,
+        });
     }
 
     // Tax is optional. When the owner has switched it off for a branch the
@@ -1300,9 +1323,14 @@ pub fn create_sale(
         line_tax_minor: i64,
         line_total_minor: i64,
     }
-    let mut posted_lines = Vec::with_capacity(snapshots.len());
-    let mut tax_minor = 0i64;
-    for (index, snapshot) in snapshots.into_iter().enumerate() {
+    // The tax of the whole bill is rounded once, then spread over the lines,
+    // so `SUM(invoice_lines.tax_minor)` is exactly `invoices.tax_minor` and the
+    // total on screen is the total that is charged.
+    let include_tax = prices_include_tax == 1;
+    let tax_minor = invoice_tax(net_after_discounts, tax_rate_bps, include_tax)?;
+    let total_minor = invoice_total(net_after_discounts, tax_minor, include_tax)?;
+    let mut tax_bases = Vec::with_capacity(snapshots.len());
+    for (index, snapshot) in snapshots.iter().enumerate() {
         let gross = snapshot
             .price
             .checked_mul(snapshot.input.quantity)
@@ -1314,27 +1342,34 @@ pub fn create_sale(
         let line_discount_minor = item_disc
             .checked_add(invoice_discount_allocations[index])
             .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
-        let tax_base = gross
-            .checked_sub(line_discount_minor)
+        tax_bases.push(
+            gross
+                .checked_sub(line_discount_minor)
+                .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?,
+        );
+    }
+    let tax_base_total: i64 = tax_bases
+        .iter()
+        .try_fold(0i64, |sum, base| sum.checked_add(*base))
+        .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
+    let line_taxes = allocate_exactly(&tax_bases, tax_minor)?;
+    let mut posted_lines = Vec::with_capacity(snapshots.len());
+    for (index, snapshot) in snapshots.into_iter().enumerate() {
+        let line_net_minor = tax_bases[index];
+        let line_tax_minor = line_taxes[index];
+        let line_discount_minor = snapshot
+            .price
+            .checked_mul(snapshot.input.quantity)
+            .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?
+            .checked_sub(line_net_minor)
             .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
-        let line_tax_minor = round_tax_to_policy(if prices_include_tax == 1 {
-            rounded_ratio(
-                tax_base as i128 * tax_rate_bps as i128,
-                (10000 + tax_rate_bps) as i128,
-            )?
+        let line_total_minor = if include_tax {
+            line_net_minor
         } else {
-            rounded_ratio(tax_base as i128 * tax_rate_bps as i128, 10000)?
-        })?;
-        let line_total_minor = if prices_include_tax == 1 {
-            tax_base
-        } else {
-            tax_base
+            line_net_minor
                 .checked_add(line_tax_minor)
                 .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?
         };
-        tax_minor = tax_minor
-            .checked_add(line_tax_minor)
-            .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
         posted_lines.push(PostedLine {
             snapshot,
             line_discount_minor,
@@ -1342,31 +1377,29 @@ pub fn create_sale(
             line_total_minor,
         });
     }
-    let total_minor = if prices_include_tax == 1 {
-        net_after_discounts
-    } else {
-        net_after_discounts
-            .checked_add(tax_minor)
-            .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?
-    };
-    let payment_total = request.payments.iter().try_fold(0i64, |sum, p| {
-        sum.checked_add(p.amount_minor).ok_or("AMOUNT_OVERFLOW")
-    })?;
-    if payment_total != total_minor {
+    let posted_total: i64 = posted_lines
+        .iter()
+        .try_fold(0i64, |sum, line| sum.checked_add(line.line_total_minor))
+        .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
+    if posted_total != total_minor || tax_base_total != net_after_discounts {
+        return Err("INVOICE_TOTALS_INCONSISTENT".to_string());
+    }
+    // Card, wallet and store credit have to settle their share exactly; cash
+    // may be tendered above it, and the extra becomes the change due.
+    if settled_before_cash > total_minor {
+        return Err("PAYMENT_TOTAL_MISMATCH".to_string());
+    }
+    let remaining_cash_due = total_minor
+        .checked_sub(settled_before_cash)
+        .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
+    if cash_tendered < remaining_cash_due {
         return Err("PAYMENT_TOTAL_MISMATCH".to_string());
     }
 
     let invoice_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let local_day = Local::now().format("%Y%m%d").to_string();
-    let sequence: i64 = tx
-        .query_row(
-            "SELECT COUNT(*) + 1 FROM invoices WHERE branch_id=?1 AND invoice_no LIKE ?2",
-            params![session.branch_id, format!("NS-{local_day}-%")],
-            |row| row.get(0),
-        )
-        .map_err(db_error)?;
-    let invoice_no = format!("NS-{local_day}-{sequence:04}");
+    let invoice_no = next_document_number(&tx, &session.branch_id, "NS", &local_day)?;
     let discount_reason = request
         .discount_reason
         .as_deref()
@@ -1401,11 +1434,40 @@ pub fn create_sale(
         ).map_err(|_| "STOCK_POST_FAILED".to_string())?;
     }
 
-    for (index, payment) in request.payments.iter().enumerate() {
+    // Cash can be tendered above the total: the till shows the change due and
+    // the invoice is settled at its total, never at the banknotes handed over,
+    // so the day's takings and the profit report stay truthful. Card and
+    // wallet payments must match the total exactly, because no change can be
+    // given back through them.
+    let mut tendered: Vec<(String, i64)> = Vec::new();
+    let mut cash_due_left = remaining_cash_due;
+    let mut overpayment = 0i64;
+    for payment in &request.payments {
+        if payment.method == "CASH" {
+            let applied = payment.amount_minor.min(cash_due_left);
+            overpayment = overpayment
+                .checked_add(
+                    payment
+                        .amount_minor
+                        .checked_sub(applied)
+                        .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?,
+                )
+                .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
+            cash_due_left = cash_due_left
+                .checked_sub(applied)
+                .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
+            if applied > 0 {
+                tendered.push((payment.method.clone(), applied));
+            }
+        } else {
+            tendered.push((payment.method.clone(), payment.amount_minor));
+        }
+    }
+    for (index, (method, amount_minor)) in tendered.iter().enumerate() {
         tx.execute(
             "INSERT INTO payments(id,branch_id,invoice_id,method,amount_minor,currency_code,idempotency_key,created_at)
              VALUES(?1,?2,?3,?4,?5,'EGP',?6,?7)",
-            params![Uuid::new_v4().to_string(), session.branch_id, invoice_id, payment.method, payment.amount_minor,
+            params![Uuid::new_v4().to_string(), session.branch_id, invoice_id, method, amount_minor,
                 format!("payment:{}:{}", invoice_id, index), now],
         ).map_err(db_error)?;
     }
@@ -1443,7 +1505,13 @@ pub fn create_sale(
     }
 
     let audit_id = Uuid::new_v4().to_string();
-    let details = serde_json::json!({"invoice_no": invoice_no, "line_count": variant_ids.len(), "total_minor": total_minor}).to_string();
+    let details = serde_json::json!({
+        "invoice_no": invoice_no,
+        "line_count": variant_ids.len(),
+        "total_minor": total_minor,
+        "change_minor": overpayment,
+    })
+    .to_string();
     insert_audit(
         &tx,
         &audit_id,
@@ -1461,6 +1529,7 @@ pub fn create_sale(
         invoice_id,
         invoice_no,
         total_minor,
+        change_minor: overpayment,
     })
 }
 
@@ -2007,14 +2076,7 @@ pub fn record_return(
 
     let return_id = Uuid::new_v4().to_string();
     let local_day = Local::now().format("%Y%m%d").to_string();
-    let sequence: i64 = tx
-        .query_row(
-            "SELECT COUNT(*)+1 FROM return_documents WHERE branch_id=?1 AND return_no LIKE ?2",
-            params![session.branch_id, format!("RT-{local_day}-%")],
-            |row| row.get(0),
-        )
-        .map_err(db_error)?;
-    let return_no = format!("RT-{local_day}-{sequence:04}");
+    let return_no = next_return_number(&tx, &session.branch_id, "RT", &local_day)?;
     let now = Utc::now().to_rfc3339();
     tx.execute(
         "INSERT INTO return_documents(id,branch_id,return_no,original_invoice_id,customer_id,kind,status,reason,refund_due_minor,created_by,created_at,idempotency_key,request_hash)
@@ -2428,9 +2490,13 @@ pub fn create_exchange(
         tax: i64,
         total: i64,
     }
-    let mut posted_replacements = Vec::with_capacity(replacement_snapshots.len());
-    let mut tax_minor = 0i64;
-    for (index, snapshot) in replacement_snapshots.into_iter().enumerate() {
+    // Same rule as a sale: round the tax of the replacement invoice once,
+    // then spread it over its lines.
+    let include_tax = prices_include_tax == 1;
+    let tax_minor = invoice_tax(net_after_discounts, tax_rate_bps, include_tax)?;
+    let replacement_total = invoice_total(net_after_discounts, tax_minor, include_tax)?;
+    let mut replacement_bases = Vec::with_capacity(replacement_snapshots.len());
+    for (index, snapshot) in replacement_snapshots.iter().enumerate() {
         let gross = snapshot
             .price
             .checked_mul(snapshot.input.quantity)
@@ -2442,26 +2508,28 @@ pub fn create_exchange(
         let discount = item_discount
             .checked_add(invoice_discount_allocations[index])
             .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
-        let tax_base = gross
-            .checked_sub(discount)
-            .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
-        let line_tax = round_tax_to_policy(if prices_include_tax == 1 {
-            rounded_ratio(
-                tax_base as i128 * tax_rate_bps as i128,
-                (10000 + tax_rate_bps) as i128,
-            )?
+        replacement_bases.push(
+            gross
+                .checked_sub(discount)
+                .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?,
+        );
+    }
+    let replacement_line_taxes = allocate_exactly(&replacement_bases, tax_minor)?;
+    let mut posted_replacements = Vec::with_capacity(replacement_snapshots.len());
+    for (index, snapshot) in replacement_snapshots.into_iter().enumerate() {
+        let line_tax = replacement_line_taxes[index];
+        let line_total = if include_tax {
+            replacement_bases[index]
         } else {
-            rounded_ratio(tax_base as i128 * tax_rate_bps as i128, 10000)?
-        })?;
-        let line_total = if prices_include_tax == 1 {
-            tax_base
-        } else {
-            tax_base
+            replacement_bases[index]
                 .checked_add(line_tax)
                 .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?
         };
-        tax_minor = tax_minor
-            .checked_add(line_tax)
+        let discount = snapshot
+            .price
+            .checked_mul(snapshot.input.quantity)
+            .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?
+            .checked_sub(replacement_bases[index])
             .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
         posted_replacements.push(PostedReplacement {
             snapshot,
@@ -2470,13 +2538,6 @@ pub fn create_exchange(
             total: line_total,
         });
     }
-    let replacement_total = if prices_include_tax == 1 {
-        net_after_discounts
-    } else {
-        net_after_discounts
-            .checked_add(tax_minor)
-            .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?
-    };
     let price_difference = replacement_total
         .checked_sub(returned_value_minor)
         .ok_or_else(|| "AMOUNT_OVERFLOW".to_string())?;
@@ -2501,22 +2562,8 @@ pub fn create_exchange(
     let replacement_invoice_id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let local_day = Local::now().format("%Y%m%d").to_string();
-    let return_sequence: i64 = tx
-        .query_row(
-            "SELECT COUNT(*)+1 FROM return_documents WHERE branch_id=?1 AND return_no LIKE ?2",
-            params![session.branch_id, format!("EX-{local_day}-%")],
-            |row| row.get(0),
-        )
-        .map_err(db_error)?;
-    let return_no = format!("EX-{local_day}-{return_sequence:04}");
-    let invoice_sequence: i64 = tx
-        .query_row(
-            "SELECT COUNT(*)+1 FROM invoices WHERE branch_id=?1 AND invoice_no LIKE ?2",
-            params![session.branch_id, format!("NS-{local_day}-%")],
-            |row| row.get(0),
-        )
-        .map_err(db_error)?;
-    let replacement_invoice_no = format!("NS-{local_day}-{invoice_sequence:04}");
+    let return_no = next_return_number(&tx, &session.branch_id, "EX", &local_day)?;
+    let replacement_invoice_no = next_document_number(&tx, &session.branch_id, "NS", &local_day)?;
     tx.execute(
         "INSERT INTO return_documents(id,branch_id,return_no,original_invoice_id,customer_id,kind,status,reason,refund_due_minor,created_by,created_at,idempotency_key,request_hash)
          VALUES(?1,?2,?3,?4,?5,'EXCHANGE','COMPLETED',?6,?7,?8,?9,?10,?11)",
@@ -4053,27 +4100,74 @@ fn argon2_instance() -> Result<Argon2<'static>, String> {
     Ok(Argon2::new(Algorithm::Argon2id, Version::V0x13, params))
 }
 
+/// Escape the LIKE wildcards so a pattern matches literally.
+fn escape_like(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+/// The next invoice number of the day for a branch.
+///
+/// Counting the invoices of the day is not enough: a voided or removed
+/// document would hand out a number that was already printed, and two tills
+/// that count at the same instant agree on the same number. This reads the
+/// highest number issued today and adds one, so a number is never reused.
+fn next_document_number(
+    tx: &Transaction<'_>,
+    branch_id: &str,
+    prefix: &str,
+    local_day: &str,
+) -> Result<String, String> {
+    // `_` and `%` are LIKE wildcards, and the day could contain a `_` if the
+    // format ever changes, so the prefix is escaped and matched explicitly.
+    let pattern = format!("{prefix}-{local_day}-%");
+    let highest: Option<String> = tx
+        .query_row(
+            "SELECT MAX(invoice_no) FROM invoices WHERE branch_id=?1 AND invoice_no LIKE ?2 ESCAPE '\\'",
+            params![branch_id, escape_like(&pattern)],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    let sequence = highest
+        .as_deref()
+        .and_then(|number| number.rsplit('-').next())
+        .and_then(|tail| tail.parse::<i64>().ok())
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "INVOICE_SEQUENCE_EXHAUSTED".to_string())?;
+    Ok(format!("{prefix}-{local_day}-{sequence:04}"))
+}
+
+/// The next return or exchange number of the day, using the same rule.
+fn next_return_number(
+    tx: &Transaction<'_>,
+    branch_id: &str,
+    prefix: &str,
+    local_day: &str,
+) -> Result<String, String> {
+    let pattern = format!("{prefix}-{local_day}-%");
+    let highest: Option<String> = tx
+        .query_row(
+            "SELECT MAX(return_no) FROM return_documents WHERE branch_id=?1 AND return_no LIKE ?2 ESCAPE '\\'",
+            params![branch_id, escape_like(&pattern)],
+            |row| row.get(0),
+        )
+        .map_err(db_error)?;
+    let sequence = highest
+        .as_deref()
+        .and_then(|number| number.rsplit('-').next())
+        .and_then(|tail| tail.parse::<i64>().ok())
+        .unwrap_or(0)
+        .checked_add(1)
+        .ok_or_else(|| "RETURN_SEQUENCE_EXHAUSTED".to_string())?;
+    Ok(format!("{prefix}-{local_day}-{sequence:04}"))
+}
+
 fn request_hash<T: Serialize>(value: &T) -> Result<String, String> {
     let bytes = serde_json::to_vec(value).map_err(|_| "REQUEST_HASH_FAILED".to_string())?;
     Ok(hex::encode(Sha256::digest(bytes)))
-}
-
-fn rounded_ratio(numerator: i128, denominator: i128) -> Result<i64, String> {
-    if denominator <= 0 || numerator < 0 {
-        return Err("AMOUNT_INVALID".to_string());
-    }
-    let rounded = (numerator + denominator / 2) / denominator;
-    i64::try_from(rounded).map_err(|_| "AMOUNT_OVERFLOW".to_string())
-}
-
-/// Tax is approved at 14% with rounding to the nearest whole EGP.
-/// Amounts are held in minor units (piastres), so one EGP is 100 minor units.
-fn round_tax_to_policy(tax_minor: i64) -> Result<i64, String> {
-    if tax_minor < 0 {
-        return Err("AMOUNT_INVALID".to_string());
-    }
-    let rounded = ((tax_minor as i128 + 50) / 100) * 100;
-    i64::try_from(rounded).map_err(|_| "AMOUNT_OVERFLOW".to_string())
 }
 
 fn rounded_signed_ratio(numerator: i128, denominator: i128) -> Result<i64, String> {
@@ -4168,17 +4262,13 @@ pub(crate) fn db_error(error: rusqlite::Error) -> String {
 
 #[cfg(test)]
 mod tax_policy_tests {
-    use super::round_tax_to_policy;
+    use super::invoice_tax;
 
     #[test]
-    fn tax_rounds_to_nearest_whole_egp() {
-        // Minor units are piastres: 100 minor = 1 EGP.
-        // 12.40 EGP rounds down to 12, and 12.50 rounds up to 13.
-        assert_eq!(round_tax_to_policy(1_240), Ok(1_200));
-        assert_eq!(round_tax_to_policy(1_250), Ok(1_300));
-        assert_eq!(round_tax_to_policy(49), Ok(0));
-        assert_eq!(round_tax_to_policy(50), Ok(100));
-        assert_eq!(round_tax_to_policy(0), Ok(0));
-        assert!(round_tax_to_policy(-1).is_err());
+    fn a_whole_bill_is_taxed_once_not_per_line() {
+        // Two lines of 88.60 EGP at 14 %, prices exclusive: the invoice is
+        // charged 25.00 EGP of tax, not 12 + 12 = 24.00 EGP.
+        let net = 2 * 8_860;
+        assert_eq!(invoice_tax(net, 1_400, false), Ok(2_500));
     }
 }
