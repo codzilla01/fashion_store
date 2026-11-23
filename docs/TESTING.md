@@ -14,7 +14,7 @@
 |---|---|---|
 | بناء واجهة POS | `npm run build` (tsc + vite) | ✅ |
 | بناء واجهة أداة التفعيل | `npm run build` | ✅ |
-| اختبارات المخطط | `python -m unittest discover -s tests -v` | ✅ 10 اختبارات |
+| اختبارات المخطط | `python -m unittest discover -s tests -v` | ✅ 16 اختبارًا |
 | تنسيق Rust | `cargo fmt --check` (4 crates) | ✅ |
 | اختبارات `license-format` | `cargo test --all-features` | ✅ |
 | اختبارات `license-issuer` | `cargo test --all-features` | ✅ |
@@ -42,7 +42,7 @@ gh api repos/codzilla01/fashion_store/commits/<sha>/comments --jq '.[].body'
 
 ## 2. اختبارات المخطط (Python + SQLite عادي)
 
-`tests/test_schema_smoke.py` — **10 اختبارات ناجحة**:
+`tests/test_schema_smoke.py` — **16 اختبارًا ناجحًا**:
 
 1. رصيد المتغير على مستوى SKU مع تفعيله من دفتر المخزون.
 2. تفرد SKU والباركود داخل الفرع.
@@ -54,6 +54,12 @@ gh api repos/codzilla01/fashion_store/commits/<sha>/comments --jq '.[].body'
 8. الاستبدال يربط المرتجع بالفاتورة الجديدة مع صافي المخزون.
 9. **حالة التجربة المحلية**: صف واحد فقط، ولا تحديث ولا حذف.
 10. **بصمة الجهاز مسجَّلة** في حالة التجربة.
+11. **الفرع الجديد يبدأ والضريبة مطفأة** (`tax_rate_bps = 0`).
+12. **المهاجرة `0004` لا تفرض 14%** على الفروع القائمة.
+13. **رصيد العميل مشتق** من الملاحظات ويُستهلك كطريقة دفع.
+14. **دفتر الولاء append-only** (لا تعديل ولا حذف).
+15. **بيانات دفعة الاستيراد تتطلب دفعة** (سلامة مرجعية).
+16. **ساعة النظام ذات قيمة عالية واحدة** (حارس التراجع الزمني).
 
 > ⚠️ هذه الاختبارات تستخدم SQLite النظام، **ولا تختبر SQLCipher أو DPAPI**.
 
